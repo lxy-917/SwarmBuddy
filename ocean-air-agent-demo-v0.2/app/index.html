@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b1013" />
+  <title>海空跨域无人集群 Agent</title>
+  <link rel="icon" href="../assets/h-theme/branding/mark.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="4" r="2.5"/><circle cx="4" cy="12" r="2.5"/><circle cx="20" cy="12" r="2.5"/><circle cx="12" cy="20" r="2.5"/><path d="m6 10 4-4m4 0 4 4m0 4-4 4m-4 0-4-4"/></symbol>
+    <symbol id="i-tools" viewBox="0 0 24 24"><path d="M8 7V5a4 4 0 0 1 8 0v2M5 7h14a2 2 0 0 1 2 2v11H3V9a2 2 0 0 1 2-2ZM3 13h6v3h6v-3h6"/></symbol>
+    <symbol id="i-data" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 4 16 4 16 0V5M4 11v7c0 4 16 4 16 0v-7"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v11H3ZM3 7V4h7l2 3M7 14h10"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="m9 3 1-2h4l1 2 3 2 3 1-1 4v4l1 4-3 1-3 2-1 2h-4l-1-2-3-2-3-1 1-4v-4L3 6l3-1Z"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-waves" viewBox="0 0 32 24"><path d="M2 10c6 0 9-9 14-9s8 9 14 9M2 18c6 0 9-6 14-6s8 6 14 6"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M5 2h10l4 4v16H5ZM14 2v6h5M8 12h8M8 16h8"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="5" cy="17" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="9" cy="5" r="2"/><circle cx="19" cy="17" r="2"/><path d="m7 15 10-8M7 5h-2v5M17 17h-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 3 15 9L7 21Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6M3 3l6 6m6 6 6 6"/></symbol>
+    <symbol id="i-replay" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 3v7h7"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 3 17 9L4 21l3-9ZM7 12h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  </defs></svg>
+
+  <div class="app-shell">
+    <header class="masthead">
+      <h1><span>海空跨域无人集群</span> <b>Agent</b></h1>
+      <p class="masthead-tagline">让海洋更可知&nbsp;&nbsp;让任务更高效</p>
+      <div class="masthead-signature" aria-hidden="true"><svg viewBox="0 0 140 22"><path d="M1 16c25-12 45-12 65-3s43 6 72-9M18 16c20-9 44-5 68 0s28 2 42-3"/></svg><span>深海无界 · 协同共行</span></div>
+    </header>
+    <div class="workbench">
+      <aside class="sidebar" aria-label="功能导航">
+        <nav class="nav-group">
+          <button class="nav-item active" type="button" data-view="mission" aria-current="page"><svg class="icon grid-icon"><use href="#i-grid"/></svg><span>任务中心</span></button>
+          <button class="nav-item" type="button" data-view="collaboration"><svg class="icon"><use href="#i-network"/></svg><span>智能协同</span></button>
+          <button class="nav-item" type="button" data-view="tools"><svg class="icon"><use href="#i-tools"/></svg><span>工具链路</span></button>
+        </nav>
+        <div class="nav-divider"></div>
+        <nav class="nav-group secondary-nav">
+          <button class="nav-item" type="button" data-view="data"><svg class="icon"><use href="#i-data"/></svg><span>数据管理</span></button>
+          <button class="nav-item" type="button" data-view="resources"><svg class="icon"><use href="#i-folder"/></svg><span>资源库</span></button>
+          <button class="nav-item" type="button" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg><span>系统设置</span></button>
+        </nav>
+        <div class="sidebar-art" role="img" aria-label="铜金色光影下的深海岩岛"></div>
+        <footer class="sidebar-footer"><p>探索深蓝</p><span>连接海与空的更多可能</span><small><i></i> 本地演示 · 场景 01</small></footer>
+      </aside>
+      <main class="agent-panel panel" aria-label="Agent 执行过程">
+        <div class="coordinator-heading">
+          <div class="agent-orb" aria-hidden="true"><span></span><i></i></div>
+          <div><h2>AI 任务协调员</h2><p>我已就绪，为您规划和执行海空协同任务。</p></div>
+        </div>
+        <div class="conversation-flow">
+          <div class="user-message" id="userMessage">请对目标海域进行二维扫描，生成覆盖完整的航迹，避开岛礁区域。</div>
+          <div class="assistant-row">
+            <div class="agent-orb small" aria-hidden="true"><span></span></div>
+            <div class="assistant-bubble">
+              <p class="understanding" id="understandingText">已理解任务目标：<br />对指定海域进行二维扫描，生成覆盖完整的航迹，并避开岛礁区域。</p>
+              <div class="execution-trace" aria-label="任务执行时间线" aria-live="polite">
+                <article class="trace-step done" data-step="0"><div class="trace-icon"><svg class="icon"><use href="#i-doc"/></svg></div><div class="trace-content"><h3>任务理解</h3><ul><li>解析任务区域与约束条件</li><li>识别岛礁、禁航区等障碍物</li><li>确定扫描策略（二维、等距航线）</li></ul></div><span class="step-check" aria-label="已完成"><svg class="icon"><use href="#i-check"/></svg></span></article>
+                <article class="trace-step done" data-step="1"><div class="trace-icon"><svg class="icon"><use href="#i-route"/></svg></div><div class="trace-content"><h3>生成路径</h3><ul><li>构建可航行区域</li><li>规划覆盖航线</li><li>优化航迹长度与转弯节点</li></ul></div><span class="step-check" aria-label="已完成"><svg class="icon"><use href="#i-check"/></svg></span></article>
+                <article class="trace-step done" data-step="2"><div class="trace-icon play-icon"><svg class="icon"><use href="#i-play"/></svg></div><div class="trace-content"><h3 id="executionTitle">执行完成</h3><ul><li>已完成航迹生成与模拟验证</li><li>覆盖率达标</li><li>可下发执行</li></ul></div><span class="step-check" aria-label="已完成"><svg class="icon"><use href="#i-check"/></svg></span></article>
+              </div>
+            </div>
+          </div>
+          <div class="agent-answer" id="agentAnswer">二维海域扫描任务已完成。<br />本次规划覆盖率 <b>96%</b>，航迹总长度 <b>12.4 km</b>，<br class="wide-only" />已避开所有岛礁区域。</div>
+        </div>
+        <form class="composer" id="missionForm"><span class="composer-ring" aria-hidden="true"></span><label class="sr-only" for="missionInput">任务需求</label><input id="missionInput" type="text" placeholder="描述您的任务需求…" maxlength="240" autocomplete="off" /><button id="sendButton" type="submit" class="send-button" aria-label="提交任务并演示执行"><svg class="icon"><use href="#i-send"/></svg></button></form>
+      </main>
+      <section class="result-panel panel" aria-label="海域扫描结果">
+        <header class="result-heading">
+          <div class="result-title"><svg class="waves-icon"><use href="#i-waves"/></svg><h2>海域扫描结果</h2></div>
+          <div class="map-controls"><label class="sr-only" for="mapMode">地图显示模式</label><select id="mapMode"><option value="route">二维扫描（S型航线）</option><option value="terrain">海域地形</option></select><button id="replayButton" class="icon-button" type="button" aria-label="重新演示任务" title="重新演示任务"><svg class="icon"><use href="#i-replay"/></svg></button><button id="expandButton" class="icon-button" type="button" aria-label="展开地图" title="展开地图"><svg class="icon"><use href="#i-expand"/></svg></button></div>
+        </header>
+        <div class="map-frame" id="mapFrame">
+          <img class="ocean-terrain" src="../assets/h-theme/maps/deep-sea-terrain.png" alt="岩岛与深海海浪组成的二维示意海域" />
+          <svg class="map-overlay" id="mapOverlay" viewBox="0 0 1000 625" preserveAspectRatio="none" aria-label="扫描航迹与岛礁边界">
+            <defs><filter id="routeGlow" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter><marker id="routeArrow" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 2 10 6 1 10Z" fill="#9dddff"/></marker></defs>
+            <path class="mission-boundary" d="M184 35H620L650 74H744L794 160 842 210 856 377 759 489 747 590H132L72 390 86 198Z"/>
+            <g class="island-boundaries">
+              <path d="M215 86Q245 76 255 114L275 150 259 198 214 198 186 157 194 119Z"/>
+              <path d="M351 275 389 224 441 214 476 159 527 194 568 263 547 340 568 382 525 431 476 444 436 412 374 402 347 352Z"/>
+              <path d="M636 230 660 231 693 276 660 309 609 312 606 274Z"/>
+              <path d="M851 258 895 256 909 293 955 302 941 350 892 362 850 352 812 322 805 291Z"/>
+              <path d="M665 434 708 436 752 491 731 542 674 560 619 537 619 490Z"/>
+              <path d="M543 491 567 496 582 544 552 566 524 548 524 520Z"/>
+            </g>
+            <g id="scanRoutes" class="scan-routes" filter="url(#routeGlow)">
+              <path class="scan-path" d="M538 53H299Q275 53 275 67Q275 81 299 81H655Q679 81 679 95Q679 109 655 109H311Q287 109 287 123Q287 137 311 137H688Q712 137 712 151Q712 165 688 165H581"/>
+              <path class="scan-path" d="M328 225H160Q136 225 136 241Q136 257 160 257H302Q326 257 326 273Q326 289 302 289H142Q118 289 118 305Q118 321 142 321H290Q314 321 314 337Q314 353 290 353H133Q109 353 109 369Q109 385 133 385H314Q338 385 338 401Q338 417 314 417H155Q131 417 131 433Q131 449 155 449H381"/>
+              <path class="scan-path" d="M609 203H791Q815 203 815 219Q815 235 791 235H727Q711 235 711 251Q711 267 727 267H750Q766 267 766 283Q766 299 750 299H737Q721 299 721 315Q721 331 737 331H765Q781 331 781 347Q781 363 765 363H655Q631 363 631 379Q631 395 655 395H774Q798 395 798 411Q798 427 774 427H618"/>
+              <path class="scan-path" d="M449 473H172Q148 473 148 489Q148 505 172 505H474Q498 505 498 521Q498 537 474 537H192Q168 537 168 553Q168 569 192 569H463"/>
+            </g>
+            <g class="route-arrows" fill="none" stroke="#b1e7ff" stroke-width="1.5" marker-end="url(#routeArrow)"><path d="M466 53h-24"/><path d="M439 137h25"/><path d="M178 353h-20"/><path d="M175 417h22"/><path d="M713 427h-20"/><path d="M358 569h25"/></g>
+            <g class="waypoints" fill="#d5f3ff"><circle cx="538" cy="53" r="3"/><circle cx="463" cy="569" r="3"/><circle cx="328" cy="225" r="2"/></g>
+            <g id="vehicleMarker" class="vehicle-marker" transform="translate(151 569)"><ellipse rx="15" ry="6" fill="#ecdfca" stroke="#938579"/><path d="M-8-3h12l3 3-3 3H-8Z" fill="#7f9297"/><circle cx="4" cy="0" r="2" fill="#182427"/></g>
+          </svg>
+          <div class="map-vignette"></div>
+          <svg class="compass" viewBox="0 0 100 116" aria-label="指北针"><g transform="translate(50 58)"><circle r="29"/><circle r="23"/><path d="M-35 0h70M0-35v70"/><path class="compass-light" d="M0-37 6 0 0-4-6 0Z"/><path class="compass-dark" d="M0 37 6 0 0 4-6 0Z"/><path class="compass-side" d="M-26 0 0-5-4 0 0 5ZM26 0 0-5 4 0 0 5Z"/></g><text x="50" y="14">N</text><text x="50" y="112">S</text><text x="8" y="62">W</text><text x="92" y="62">E</text></svg>
+          <div class="map-legend"><span><i class="legend-route"></i>扫描航迹</span><span><i class="legend-island"></i>岛礁区域</span><span><i class="legend-region"></i>任务海域</span><span><i class="legend-point"></i>起点 / 终点</span></div>
+          <div class="map-scale"><div><span>0</span><span>2.5</span><span>5 km</span></div><i></i></div>
+          <div class="map-live-status" id="mapLiveStatus" hidden><i></i><span>正在生成航迹</span></div>
+        </div>
+        <div class="results-grid">
+          <article class="metric-card coverage-card"><div class="coverage-ring" id="coverageRing" style="--coverage:96"><span></span></div><div class="coverage-value"><h3>覆盖率</h3><strong id="coverageValue">96<span>%</span></strong></div><dl class="area-values"><div><dt>已覆盖面积</dt><dd id="coveredArea">482.6 km²</dd></div><div><dt>目标面积</dt><dd>502.1 km²</dd></div></dl></article>
+          <article class="metric-card distance-card"><div class="route-medallion"><svg viewBox="0 0 60 60"><path d="m9 44 13-12 11 4 15-20"/><circle cx="9" cy="44" r="3"/><circle cx="22" cy="32" r="3"/><circle cx="33" cy="36" r="3"/><circle cx="48" cy="16" r="3"/></svg></div><div><h3>路径</h3><strong>12.4<span> km</span></strong></div><dl><div><dt>航点数量</dt><dd>48</dd></div><div><dt>航线类型</dt><dd>二维扫描（S型）</dd></div></dl></article>
+          <button class="metric-card completion-card" id="reportButton" type="button" aria-label="查看任务报告"><span class="completion-ring"><svg class="icon"><use href="#i-check"/></svg></span><span class="completion-copy"><strong id="completionTitle">执行完成</strong><span id="completionText">任务已完成<br />可查看任务报告</span></span></button>
+        </div>
+      </section>
+    </div>
+  </div>
+  <dialog id="detailDialog" aria-labelledby="dialogTitle"><div class="dialog-heading"><div><span>OCEAN · AIR · AGENT</span><h2 id="dialogTitle"></h2></div><button class="icon-button" id="closeDialog" type="button" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="dialogBody"></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="./app.js"></script>
+</body>
+</html>

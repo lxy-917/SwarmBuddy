@@ -1,0 +1,39 @@
+/* 工具中心沿用 SwarmBuddy 的深色面板，避免浅色主题变量造成白边和低对比度文字。 */
+html.swarm-mcp-theme {
+	color-scheme: dark;
+	--bg: #0b1216;
+	--background: #0b1216;
+	--foreground: #e5e9e9;
+	--card: #111b20;
+	--card-foreground: #e5e9e9;
+	--popover: #17242a;
+	--popover-foreground: #e5e9e9;
+	--primary: #d3a16b;
+	--primary-foreground: #142026;
+	--secondary: #1b2b31;
+	--secondary-foreground: #dce5e5;
+	--muted: #202e34;
+	--muted-foreground: #9caaae;
+	--accent: #263b42;
+	--accent-foreground: #f0d0a7;
+	--border: #34454b;
+	--input: #34454b;
+	--ring: #c99a66;
+	--sidebar: #111e25;
+	--sidebar-foreground: #dce5e5;
+	--sidebar-accent: #23343a;
+	--sidebar-accent-foreground: #f0d0a7;
+	--sidebar-border: rgba(210, 184, 151, .19);
+	--text-secondary: #c0cbce;
+	--text-tertiary: #8fa3a9;
+	--text-data: #9ab0b5;
+	--surface-muted: #223238;
+	--row-hover: #1e3036;
+	--panel-shadow: 0 18px 42px rgba(0, 0, 0, .28);
+}
+
+.swarm-mcp-theme .swarm-tool-inset { background: #0b1216; }
+.swarm-mcp-theme .swarm-tool-root [data-slot='sidebar-menu-button'][data-active='true'] {
+	background: rgba(216, 166, 110, .15);
+	color: #f0d0ab;
+}

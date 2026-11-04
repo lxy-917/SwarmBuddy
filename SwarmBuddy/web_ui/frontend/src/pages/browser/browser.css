@@ -1,0 +1,92 @@
+.swarm-browser-page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+  padding: 8px 0 8px 8px;
+  background: #0b1013;
+  color: #e7e9e7;
+  font-family: 'Geist Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.swarm-browser-page button, .swarm-browser-page input { font-family: inherit; }
+.swarm-browser-tabs, .swarm-browser-main {
+  min-height: 0;
+  border: 1px solid rgba(210, 184, 151, .19);
+  border-radius: 22px;
+  background: linear-gradient(150deg, #18272e, #111e25 70%);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .28);
+}
+.swarm-browser-tabs {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: calc(clamp(270px, 19vw, 300px) - 66px);
+  padding: 20px 11px;
+}
+.swarm-browser-tabs-heading { padding: 0 7px 26px; }
+.swarm-browser-tabs-heading h2 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; letter-spacing: -.02em; }
+.swarm-browser-tabs-heading p { margin: 4px 0 0; color: #91a3aa; font-size: 12px; line-height: 16px; }
+.swarm-browser-new-tab, .swarm-browser-tab-select, .swarm-browser-tab-close, .swarm-browser-toolbar > button, .swarm-browser-search button, .swarm-browser-results button { cursor: pointer; }
+.swarm-browser-new-tab { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: #e7e9e7; font-size: 13px; text-align: left; }
+.swarm-browser-new-tab:hover { background: rgba(216, 166, 110, .12); }
+.swarm-browser-new-tab svg { color: #ddb17c; }
+.swarm-browser-tab-list { display: grid; align-content: start; gap: 4px; min-height: 0; margin-top: 7px; overflow-y: auto; }
+.swarm-browser-tab { display: flex; align-items: center; min-width: 0; border: 1px solid transparent; border-radius: 9px; }
+.swarm-browser-tab:hover { background: rgba(216, 166, 110, .07); }
+.swarm-browser-tab.active { border-color: rgba(215, 168, 111, .2); background: rgba(216, 166, 110, .15); }
+.swarm-browser-tab-select { display: flex; align-items: center; flex: 1; min-width: 0; gap: 9px; min-height: 41px; padding: 0 9px; border: 0; background: transparent; color: #e7e9e7; font-size: 12px; text-align: left; }
+.swarm-browser-tab-select svg { flex: none; color: #8bb4bc; }
+.swarm-browser-tab-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swarm-browser-tab-close { display: grid; flex: none; place-items: center; width: 26px; height: 26px; margin-right: 5px; border: 0; border-radius: 6px; background: transparent; color: #9fb0b3; }
+.swarm-browser-tab-close:hover { background: rgba(255, 255, 255, .09); color: #f1c18a; }
+.swarm-browser-main { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow: hidden; }
+.swarm-browser-toolbar { display: flex; flex: none; align-items: center; gap: 8px; min-height: 66px; padding: 11px 15px; border-bottom: 1px solid rgba(173, 195, 197, .13); }
+.swarm-browser-toolbar > button { display: grid; flex: none; place-items: center; width: 35px; height: 35px; border: 0; border-radius: 8px; background: transparent; color: #bcc9ca; }
+.swarm-browser-toolbar > button:hover:not(:disabled) { background: rgba(216, 166, 110, .12); color: #efc38d; }
+.swarm-browser-toolbar > button:disabled { cursor: not-allowed; opacity: .35; }
+.swarm-browser-address { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; height: 40px; padding: 0 13px; border: 1px solid rgba(146, 175, 182, .23); border-radius: 10px; background: #0b1a20; color: #91a7ad; }
+.swarm-browser-address:focus-within { border-color: #d7a86f; box-shadow: 0 0 0 3px rgba(215, 168, 111, .12); }
+.swarm-browser-address input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #e7e9e7; font-size: 13px; }
+.swarm-browser-address input::placeholder, .swarm-browser-search input::placeholder { color: #839ba1; }
+.swarm-browser-start { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; min-height: 0; padding: 25px; }
+.swarm-browser-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 54px; color: #e8bc86; }
+.swarm-browser-brand h1 { margin: 0; font-size: 36px; line-height: 1; font-weight: 600; }
+.swarm-browser-search { display: flex; align-items: center; width: min(720px, 100%); height: 60px; padding: 0 13px 0 20px; border: 1px solid rgba(215, 168, 111, .48); border-radius: 18px; background: #0d1c22; box-shadow: 0 12px 35px rgba(0, 0, 0, .19); }
+.swarm-browser-search:focus-within { border-color: #edc28e; box-shadow: 0 0 0 3px rgba(215, 168, 111, .12); }
+.swarm-browser-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #eff1ef; font-size: 16px; }
+.swarm-browser-search button { display: grid; flex: none; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 10px; background: #d7a86f; color: #102027; }
+.swarm-browser-start > p { margin: 19px 0 0; color: #839ba1; font-size: 12px; }
+.swarm-browser-results { flex: 1; min-height: 0; overflow-y: auto; background: #fff; color: #202124; }
+.swarm-browser-results-header { display: flex; align-items: center; gap: 25px; min-height: 116px; padding: 24px clamp(22px, 4vw, 58px); border-bottom: 1px solid #e7e9ec; }
+.swarm-browser-results-logo { display: flex; align-items: center; gap: 9px; flex: none; color: #2655bb; font-size: 19px; font-weight: 650; white-space: nowrap; }
+.swarm-browser-results-header form { display: flex; align-items: center; width: min(780px, 100%); height: 52px; padding: 0 9px 0 18px; border: 1px solid #dce0e5; border-radius: 26px; box-shadow: 0 2px 9px rgba(32, 42, 54, .12); }
+.swarm-browser-results-header form:focus-within { border-color: #9db8ef; }
+.swarm-browser-results-header input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #202124; font-size: 16px; }
+.swarm-browser-results-header form button { display: grid; flex: none; place-items: center; width: 37px; height: 37px; border: 0; border-radius: 50%; background: transparent; color: #446cc9; }
+.swarm-browser-results-content { width: min(850px, 100%); padding: 0 clamp(22px, 4vw, 58px) 50px; }
+.swarm-browser-results-tabs { display: flex; gap: 24px; height: 50px; align-items: center; border-bottom: 1px solid #e7e9ec; color: #637180; font-size: 13px; }
+.swarm-browser-results-tabs strong { display: flex; align-items: center; height: 100%; border-bottom: 3px solid #3669d5; color: #245ac2; font-weight: 600; }
+.swarm-browser-results-count, .swarm-browser-results-status { margin: 24px 0; color: #66717d; font-size: 13px; }
+.swarm-browser-result { margin: 26px 0 33px; }
+.swarm-browser-result-source { display: flex; align-items: center; gap: 8px; color: #333c46; font-size: 13px; }
+.swarm-browser-result-source svg { color: #7c8792; }
+.swarm-browser-result-source small { color: #7f8993; font-size: 11px; }
+.swarm-browser-result > button { display: block; max-width: 100%; margin: 5px 0 3px; padding: 0; border: 0; background: transparent; color: #163fc2; font-size: 19px; line-height: 1.4; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.swarm-browser-result > button:hover { color: #6324a8; }
+.swarm-browser-result > p { margin: 0; color: #4c5661; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.swarm-browser-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.swarm-browser-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: #f7f7f7; }
+.swarm-browser-frame-hint { flex: none; padding: 7px 12px; border-top: 1px solid rgba(173, 195, 197, .13); color: #839ba1; font-size: 11px; text-align: center; }
+@media (max-width: 760px) {
+  .swarm-browser-page { flex-direction: column; padding: 7px; }
+  .swarm-browser-tabs { width: 100%; max-height: 190px; padding: 12px; }
+  .swarm-browser-tabs-heading { padding-bottom: 7px; }
+  .swarm-browser-tab-list { grid-auto-flow: column; grid-auto-columns: minmax(130px, 180px); overflow-x: auto; }
+  .swarm-browser-main { min-height: 350px; }
+  .swarm-browser-toolbar { gap: 2px; padding: 8px; }
+  .swarm-browser-toolbar > button { width: 30px; }
+  .swarm-browser-brand h1 { font-size: 28px; }
+  .swarm-browser-results-header { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px; }
+  .swarm-browser-results-content { padding: 0 16px 35px; }
+}

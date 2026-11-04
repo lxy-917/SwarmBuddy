@@ -1,0 +1,69 @@
+.swarm-setup-page {
+	min-height: 100%;
+	padding: 24px;
+	background: radial-gradient(circle at 50% 38%, rgba(53, 88, 94, .16), transparent 48%), #0b1519;
+	color: #e8e5df;
+}
+
+.swarm-setup-card[data-slot='card'] {
+	gap: 22px;
+	padding: 26px 24px;
+	border: 1px solid rgba(210, 184, 151, .28);
+	border-radius: 22px;
+	background: linear-gradient(150deg, #1a2b32, #111e25 72%);
+	box-shadow: 0 22px 56px rgba(0, 0, 0, .35);
+	color: #e8e5df;
+	--tw-ring-shadow: 0 0 #0000;
+}
+
+.swarm-setup-card [data-slot='card-header'],
+.swarm-setup-card [data-slot='card-content'] {
+	padding: 0;
+}
+
+.swarm-setup-card [data-slot='card-title'] {
+	color: #f2c591;
+	font-size: 21px;
+	font-weight: 650;
+}
+
+.swarm-setup-card [data-slot='card-description'] {
+	color: #9fb3b6;
+}
+
+.swarm-setup-card [data-slot='field-label'] {
+	color: #e0d8cd;
+}
+
+.swarm-setup-card [data-slot='input'] {
+	height: 42px;
+	border: 1px solid rgba(151, 174, 176, .28);
+	border-radius: 10px;
+	background: #0b1a20;
+	color: #f1eeea;
+}
+
+.swarm-setup-card [data-slot='input']:focus-visible {
+	border-color: #d7a86f;
+	box-shadow: 0 0 0 3px rgba(215, 168, 111, .17);
+	outline: none;
+}
+
+.swarm-setup-card [data-slot='button'][type='submit'] {
+	height: 42px;
+	border: 1px solid rgba(244, 203, 151, .4);
+	border-radius: 10px;
+	background: #d7a86f;
+	color: #14232a;
+	font-weight: 650;
+}
+
+.swarm-setup-card [data-slot='button'][type='submit']:hover {
+	background: #ebc18d;
+}
+
+.swarm-setup-card [data-slot='alert'] {
+	border-color: rgba(229, 112, 102, .45);
+	background: rgba(117, 51, 48, .19);
+	color: #ffaaa2;
+}
