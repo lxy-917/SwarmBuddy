@@ -28,6 +28,8 @@ interface MissionComposerProps {
 	placeholder?: string;
 	quote?: string | null;
 	onClearQuote?: () => void;
+	selectedMapObject?: string | null;
+	onClearMapObject?: () => void;
 	modelParameters?: Record<string, unknown>;
 	changingModel: boolean;
 	onModelChange: (config: ChatModelConfig) => Promise<void>;
@@ -110,6 +112,8 @@ export function MissionComposer({
 	placeholder,
 	quote,
 	onClearQuote,
+	selectedMapObject,
+	onClearMapObject,
 	modelParameters,
 	changingModel,
 	onModelChange,
@@ -240,6 +244,10 @@ export function MissionComposer({
 	const addFiles = (files: File[], keepUnsupported = false) => {
 		setAttachmentError(null);
 		for (const file of files) {
+			if (/\.geojson$/i.test(file.name) && onImportScanData) {
+				void importScanFile(file);
+				continue;
+			}
 			const mediaType = fileMediaType(file);
 			if (mediaType.startsWith('video/') && file.size > 30 * 1024 * 1024) { setAttachmentError(`视频 ${file.name} 超过 30 MB，请压缩后上传。`); continue; }
 			if (!keepUnsupported && modelCard && !readableDocument(mediaType) && !supportsFile(mediaType, modelCard.input_types)) {
@@ -264,10 +272,7 @@ export function MissionComposer({
 		addFiles(Array.from(event.target.files ?? []));
 		event.target.value = '';
 	};
-	const selectScanData = async (event: ChangeEvent<HTMLInputElement>) => {
-		const file = event.target.files?.[0];
-		event.target.value = '';
-		if (!file) return;
+	const importScanFile = async (file: File) => {
 		if (file.size > 20 * 1024 * 1024) { setAttachmentError('GeoJSON 文件不得超过 20 MB。'); return; }
 		if (!onImportScanData) { setAttachmentError('当前页面暂不支持导入海域数据。'); return; }
 		setImportingScanData(true);
@@ -281,6 +286,11 @@ export function MissionComposer({
 		} finally {
 			setImportingScanData(false);
 		}
+	};
+	const selectScanData = (event: ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		event.target.value = '';
+		if (file) void importScanFile(file);
 	};
 	const selectCodeFolder = (event: ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(event.target.files ?? []).filter((file) => /\.(txt|md|markdown|csv|json|log|py|js|jsx|ts|tsx|yaml|yml|xml|html|css|go|rs|java|c|cc|cpp|h|hpp|sh|sql)$/i.test(file.name));
@@ -418,6 +428,7 @@ export function MissionComposer({
 
 	return (
 		<div className="mission-composer-area" ref={areaRef}>
+			{selectedMapObject && <div className="mission-composer-map-context"><span>地图上下文：{selectedMapObject}</span><button type="button" aria-label="清除地图选中对象" onClick={onClearMapObject}><X size={14} /></button></div>}
 			{quote && <div className="mission-composer-quote"><span>引用：{quote}</span><button type="button" aria-label="取消引用" onClick={onClearQuote}><X size={15} /></button></div>}
 			<input ref={fileInputRef} className="sr-only" type="file" multiple onChange={selectFiles} aria-label="选择文件" />
 			<input ref={imageInputRef} className="sr-only" type="file" accept="image/*" multiple onChange={selectFiles} aria-label="选择图片" />

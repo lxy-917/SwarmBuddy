@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
-import { DEFAULT_SCAN } from './scanDefaults';
+import { DEFAULT_SCAN, hasDemoCoastline } from './scanDefaults';
 import { suggestScanParameters } from './scanParameters';
 import { EXAMPLE_SCAN_SPEED_KNOTS, readScanSpeed } from './scanSpeed';
 import { missionScanApi } from '@/api/missionScan';
+import { getBaseUrl } from '@/api/client';
 import type { ScanEnvironmentInfo, ScanRequest, ScanResult } from '@/api/missionScan';
 
-type ScanField = 'west' | 'east' | 'south' | 'north' | 'spacing_m' | 'obstacle_buffer_m' | 'speed_knots' | 'start_lon' | 'start_lat' | 'end_lon' | 'end_lat';
+type ScanField = 'west' | 'east' | 'south' | 'north' | 'spacing_m' | 'obstacle_buffer_m' | 'vessel_count' | 'speed_knots' | 'start_lon' | 'start_lat' | 'end_lon' | 'end_lat';
 type ScanDraft = Record<ScanField, string>;
 
 function toDraft(request: ScanRequest): ScanDraft {
 	const coordinate = (value: number | undefined | null) => value === undefined || value === null ? '' : value.toFixed(4);
 	return {
 		west: coordinate(request.west), east: coordinate(request.east), south: coordinate(request.south), north: coordinate(request.north),
-		spacing_m: String(request.spacing_m), obstacle_buffer_m: String(request.obstacle_buffer_m),
+		spacing_m: String(request.spacing_m), obstacle_buffer_m: String(request.obstacle_buffer_m), vessel_count: String(request.vessel_count ?? 3),
 		speed_knots: String(request.speed_knots ?? ''),
 		start_lon: coordinate(request.start_point?.[0]), start_lat: coordinate(request.start_point?.[1]),
 		end_lon: coordinate(request.end_point?.[0]), end_lat: coordinate(request.end_point?.[1]),
@@ -27,23 +28,25 @@ function toRequest(draft: ScanDraft, hasImportedData = false): ScanRequest {
 		east: Number(draft.east), north: Number(draft.north),
 		spacing_m: Number(draft.spacing_m),
 		obstacle_buffer_m: Number(draft.obstacle_buffer_m),
+		vessel_count: Number(draft.vessel_count),
 		...(draft.speed_knots.trim() ? { speed_knots: Number(draft.speed_knots) } : {}),
 		...(draft.start_lon.trim() && draft.start_lat.trim() ? { start_point: [Number(draft.start_lon), Number(draft.start_lat)] as [number, number] } : {}),
 		...(draft.end_lon.trim() && draft.end_lat.trim() ? { end_point: [Number(draft.end_lon), Number(draft.end_lat)] as [number, number] } : {}),
 		use_requested_bounds: true,
-		allow_bounds_only: !hasImportedData,
+		allow_bounds_only: !hasImportedData && !hasDemoCoastline({ west: Number(draft.west), south: Number(draft.south), east: Number(draft.east), north: Number(draft.north) }),
 	};
 }
 
 function validateDraft(draft: ScanDraft): string {
 	if (Object.entries(draft).some(([field, value]) => !['speed_knots', 'start_lon', 'start_lat', 'end_lon', 'end_lat'].includes(field) && !value.trim())) return '请填写全部参数。';
-	const { west, south, east, north, spacing_m, obstacle_buffer_m, speed_knots } = toRequest(draft);
+	const { west, south, east, north, spacing_m, obstacle_buffer_m, vessel_count, speed_knots } = toRequest(draft);
 	if (![west, south, east, north, spacing_m, obstacle_buffer_m].every(Number.isFinite)) return '请输入有效数字。';
 	if (west >= east) return `东侧经度 ${east} 必须大于西侧经度 ${west}。如果想在西侧 ${west} 的右边规划，可填 ${Number((west + 0.04).toFixed(4))}。`;
 	if (south >= north) return `北侧纬度 ${north} 必须大于南侧纬度 ${south}。`;
 	if (west < -180 || east > 180 || south < -90 || north > 90) return '经纬度超出 WGS84 范围。';
 	if (spacing_m < 30 || spacing_m > 2000) return '扫描间距应在 30–2000 米之间。';
 	if (obstacle_buffer_m < 0 || obstacle_buffer_m > 500) return '避障距离应在 0–500 米之间。';
+	if (vessel_count === undefined || !Number.isInteger(vessel_count) || vessel_count < 1 || vessel_count > 8) return '无人艇数量应在 1–8 艘之间。';
 	if (speed_knots !== undefined && (!Number.isFinite(speed_knots) || speed_knots <= 0)) return '预计航速应大于 0 节。';
 	if (Boolean(draft.start_lon.trim()) !== Boolean(draft.start_lat.trim())) return '请同时填写起点经度和纬度。';
 	if (draft.start_lon.trim() && draft.start_lat.trim()) {
@@ -85,13 +88,13 @@ export function MissionScanPlanner({
 	const [useDemo, setUseDemo] = useState(false);
 
 	useEffect(() => {
-		const planKey = `${agentId ?? ''}:${sessionId ?? ''}:${result ? JSON.stringify([result.bounds, result.spacing_m, result.obstacle_buffer_m, result.path_length_m, result.start_point, result.end_point]) : 'new'}`;
+		const planKey = `${agentId ?? ''}:${sessionId ?? ''}:${result ? JSON.stringify([result.bounds, result.spacing_m, result.obstacle_buffer_m, result.vessel_count, result.path_length_m, result.start_point, result.end_point]) : 'new'}`;
 		if (planKey === lastPlanKey.current) return;
 		lastPlanKey.current = planKey;
 		manualSpacing.current = false;
 		manualBuffer.current = false;
 		const speed_knots = readScanSpeed(agentId, sessionId, result?.speed_knots);
-		setDraft(toDraft(result ? { ...result.bounds, spacing_m: result.spacing_m, obstacle_buffer_m: result.obstacle_buffer_m, speed_knots, start_point: result.start_point, end_point: result.end_point } : { ...DEFAULT_SCAN, speed_knots }));
+		setDraft(toDraft(result ? { ...result.bounds, spacing_m: result.spacing_m, obstacle_buffer_m: result.obstacle_buffer_m, vessel_count: result.vessel_count, speed_knots, start_point: result.start_point, end_point: result.end_point } : { ...DEFAULT_SCAN, speed_knots }));
 	}, [agentId, sessionId, result]);
 	useEffect(() => {
 		if (!coordinatePrefill) return;
@@ -148,6 +151,9 @@ export function MissionScanPlanner({
 				...toRequest(draft, Boolean(importedBounds)),
 				...(useDemo ? { use_demo: true } : {}),
 			});
+			if (next.planner !== 'darp_python' || next.map.routes?.length !== Number(draft.vessel_count)) {
+				throw new Error(`当前后端仍返回旧航迹（服务地址：${getBaseUrl() || '未配置'}）。请重启该地址对应的后端，然后再次生成航迹。`);
+			}
 			onResult(next);
 			dialogRef.current?.close();
 		} catch (cause) {
@@ -172,10 +178,11 @@ export function MissionScanPlanner({
 						['south', '南侧纬度（°N）'], ['north', '北侧纬度（°N）'],
 						['spacing_m', '扫描间距（米）'], ['obstacle_buffer_m', '避障距离（米）'],
 						['speed_knots', '预计航速（节）'],
+						['vessel_count', '无人艇数量'],
 						['start_lon', '起点经度（可选）'], ['start_lat', '起点纬度（可选）'],
 						['end_lon', '终点经度（可选）'], ['end_lat', '终点纬度（可选）'],
 					] as [ScanField, string][]).map(([field, label]) =>
-						<label key={field}>{label}<input type="number" step={field === 'spacing_m' ? '10' : field === 'obstacle_buffer_m' ? '5' : field === 'speed_knots' ? '0.1' : '0.0001'} min={field === 'speed_knots' ? '0.1' : undefined} required={!['speed_knots', 'start_lon', 'start_lat', 'end_lon', 'end_lat'].includes(field)} value={draft[field]} onChange={(event) => update(field, event.target.value)} /></label>
+						<label key={field}>{label}<input type="number" step={field === 'vessel_count' ? '1' : field === 'spacing_m' ? '10' : field === 'obstacle_buffer_m' ? '5' : field === 'speed_knots' ? '0.1' : '0.0001'} min={field === 'vessel_count' ? '1' : field === 'speed_knots' ? '0.1' : undefined} max={field === 'vessel_count' ? '8' : undefined} required={!['speed_knots', 'start_lon', 'start_lat', 'end_lon', 'end_lat'].includes(field)} value={draft[field]} onChange={(event) => update(field, event.target.value)} /></label>
 					)}
 				</div>
 				<p>间距和避障缓冲会随海域宽高给出建议值；传感器幅宽与实际航行安全距离仍需人工核定。</p>

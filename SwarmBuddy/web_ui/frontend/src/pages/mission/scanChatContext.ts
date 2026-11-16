@@ -11,6 +11,7 @@ const SCAN_CONTEXT_IMAGE_NAME = 'SwarmBuddy 当前海域扫描图.png';
 
 export function isScanContextBlock(block: ContentBlock): boolean {
 	return block.type === 'text' && block.text.startsWith(SCAN_CONTEXT_MARKER)
+		|| block.type === 'text' && block.text.startsWith('[SwarmBuddyMissionContext JSON]')
 		|| block.type === 'data' && block.name === SCAN_CONTEXT_IMAGE_NAME;
 }
 

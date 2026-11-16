@@ -1,5 +1,4 @@
-﻿import { ReplyFinishedReason } from '@agentscope-ai/agentscope/event';
-import { AssistantMsg, UserMsg } from '@agentscope-ai/agentscope/message';
+import { ReplyFinishedReason } from '@agentscope-ai/agentscope/event';
 import type { Msg, TextBlock } from '@agentscope-ai/agentscope/message';
 import type { ContentBlock } from '@agentscope-ai/agentscope/message';
 import katexStyles from 'katex/dist/katex.min.css?inline';
@@ -10,6 +9,7 @@ import {
 	Compass,
 	LoaderCircle,
 	Expand,
+	Grid3X3,
 	FolderOpen,
 	MessageSquare,
 	Copy,
@@ -39,12 +39,18 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import './missionTableDialog.css';
+import { scanMatchesCoordinates, scanPlanReport } from './missionChatActions';
+import { buildMissionChatSnapshot, locateMissionObject, parseLocateRequest } from './missionChatBridge';
 import { MissionComposer } from './MissionComposer';
-import { advanceSimulation, simulatedCoverage, simulationInitial } from './missionCooperationSimulation';
+import { MissionGamePanel } from './MissionGamePanel';
+import { advanceSimulation, pauseSimulation, simulatedCoverage, simulationAssets, simulationInitial, startSimulation } from './missionCooperationSimulation';
+import { commandFleetUav, releaseFleetUav, reportFleetObservation, respondFleetObservation } from './missionFleet';
+import type { FleetUavCommand, FleetPoint } from './missionFleet';
 import { MissionMessageActions } from './MissionMessageActions';
 import { MissionMessageContent } from './MissionMessageContent';
-import { MissionScanMap } from './MissionScanMap';
+import { advanceMultiGrid, multiGridInitial, multiGridSummary } from './missionMultiGrid';
 import { UavIcon, UsvIcon } from './MissionPlatformIcons';
+import { MissionScanMap } from './MissionScanMap';
 import { MissionScanPlanner } from './MissionScanPlanner';
 import { MissionScanDownloadSave, MissionScanSummary } from './MissionScanSummary';
 import { MissionSituationAside, MissionSituationClock } from './MissionSituationAside';
@@ -54,13 +60,13 @@ import { MissionUserMessageActions } from './MissionUserMessageActions';
 import { RobotAvatar } from './RobotAvatar';
 import { createScanChatContextBlocks, isScanContextBlock } from './scanChatContext';
 import { inferScanBounds, parseChatScanCoordinates } from './scanChatCoordinates';
-import { DEFAULT_SCAN } from './scanDefaults';
+import { DEFAULT_SCAN, hasDemoCoastline } from './scanDefaults';
 import { suggestScanParameters } from './scanParameters';
 import { readScanSpeed, saveScanSpeed } from './scanSpeed';
 import type { ChatModelConfig } from '@/api';
 import { ApiError, getBaseUrl } from '@/api/client';
 import { missionScanApi } from '@/api/missionScan';
-import type { MarineConditions, MarineObservations, ScanEnvironmentInfo, ScanGeoJSON, ScanRequest, ScanResult } from '@/api/missionScan';
+import type { MarineConditions, MarineObservations, MissionMapSelection, MissionTaskAssignment, MissionTaskEvent, ScanEnvironmentInfo, ScanGeoJSON, ScanRequest, ScanResult } from '@/api/missionScan';
 import { SwarmAppRail } from '@/components/layout/SwarmAppRail';
 import { AudioProvider } from '@/context/AudioContext';
 import { useAgents } from '@/hooks/useAgents';
@@ -71,7 +77,7 @@ import { COLLABORATION_AGENT_NAME } from '@/pages/collaboration/collaborationDra
 import { readChatCredentialPreference } from '@/pages/credential/credentialPreference';
 import { isKnowledgeChatAgent } from '@/pages/knowledge/knowledgeChat';
 
-const FRAME_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body,#mission-root{min-height:100%;background:#061522}</style><style>${katexStyles}</style><link rel="stylesheet" href="/ocean/app/styles.css"><link rel="stylesheet" href="/ocean/app/integration.css?v=situation-board-13"></head><body><div id="mission-root"></div></body></html>`;
+const FRAME_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body,#mission-root{min-height:100%;background:#061522}</style><style>${katexStyles}</style><link rel="stylesheet" href="/ocean/app/styles.css"><link rel="stylesheet" href="/ocean/app/integration.css?v=situation-board-30"></head><body><div id="mission-root"></div></body></html>`;
 const QUICK_CHAT_NAME = 'SwarmBuddy 快速问答';
 const QUICK_CHAT_PROMPT = '你是 SwarmBuddy 的通用问答助手。';
 const DEMO_BOAT_ROUTE = 'M538 53H299Q275 53 275 67Q275 81 299 81H655Q679 81 679 95Q679 109 655 109H311Q287 109 287 123Q287 137 311 137H688Q712 137 712 151Q712 165 688 165H581';
@@ -89,20 +95,6 @@ function readItemFlags(key: string): Record<string, boolean> {
 	}
 }
 
-function scanMessageKey(agentId?: string, sessionId?: string): string {
-	return `swarmbuddy.scanChatMessages:${agentId ?? ''}:${sessionId ?? ''}`;
-}
-
-function readScanMessages(agentId?: string, sessionId?: string): Msg[] {
-	if (!agentId || !sessionId) return [];
-	try {
-		const value: unknown = JSON.parse(localStorage.getItem(scanMessageKey(agentId, sessionId)) ?? '[]');
-		return Array.isArray(value) ? value.filter((message): message is Msg => Boolean(message && typeof message === 'object' && typeof message.id === 'string' && message.id.startsWith('local-scan-'))) : [];
-	} catch {
-		return [];
-	}
-}
-
 function messageText(message: Msg): string {
 	const texts = message.content
 		.filter((block): block is TextBlock => block.type === 'text' && !isScanContextBlock(block))
@@ -111,44 +103,6 @@ function messageText(message: Msg): string {
 		.filter((block): block is Extract<ContentBlock, { type: 'data' }> => block.type === 'data' && !isScanContextBlock(block))
 		.map((block) => `附件：${block.name ?? '文件'}`);
 	return [...texts, ...files].join('\n');
-}
-
-function longitude(value: number): string {
-	return `${Math.abs(value).toFixed(4)}°${value < 0 ? 'W' : 'E'}`;
-}
-
-function latitude(value: number): string {
-	return `${Math.abs(value).toFixed(4)}°${value < 0 ? 'S' : 'N'}`;
-}
-
-function scanMatchesCoordinates(result: ScanResult, coordinates: ReturnType<typeof parseChatScanCoordinates>): boolean {
-	if (!coordinates) return false;
-	const same = (left: number, right: number) => Math.abs(left - right) < 0.00005;
-	const samePoint = (actual: [number, number] | null | undefined, expected: [number, number]) =>
-		Boolean(actual && same(actual[0], expected[0]) && same(actual[1], expected[1]));
-	return (!coordinates.startPoint || samePoint(result.start_point, coordinates.startPoint))
-		&& (!coordinates.endPoint || samePoint(result.end_point, coordinates.endPoint))
-		&& (!coordinates.bounds || Object.entries(coordinates.bounds).every(([key, value]) =>
-			same(result.bounds[key as keyof ScanResult['bounds']], value)));
-}
-
-function scanSuccessReply(result: ScanResult, derivedBounds = false, radiusKm?: number): string {
-	const startText = result.start_point ? `从 ${longitude(result.start_point[0])}、${latitude(result.start_point[1])} 出发，` : '';
-	const endText = result.end_point ? `最终到达 ${longitude(result.end_point[0])}、${latitude(result.end_point[1])}。` : '';
-	const regionText = radiusKm != null
-		? `已按中心点和 ${radiusKm} km 半径换算出矩形经纬度边界，并在“重新规划”中填写；实际扫描范围以导入海域与该边界的交集为准。`
-		: derivedBounds ? '扫描范围已根据输入坐标自动推定，已在“重新规划”中填写，可按需调整。' : '';
-	const sourceText = result.source === 'provided' ? '航线依据已导入海域数据校验。' : result.source === 'demo' ? '使用示例海域资料，仅供规划演示。' : '仅依据经纬度边界规划，未纳入障碍物、禁航区或海况资料；实际航行前须核实。';
-	if (result.route_optimized && result.baseline_path_length_m != null) {
-		const saved = Math.max(0, result.baseline_path_length_m - result.path_length_m);
-		const changeText = saved >= 0.1 ? `较原航线缩短 ${(saved / 1000).toFixed(2)} km` : '当前未找到更短的合法航线，保留原航线';
-		const connectorText = result.scan_segment_length_m != null && saved >= 0.1
-			? `扫描作业段 ${(result.scan_segment_length_m / 1000).toFixed(1)} km 保持不变；线间连接及接驳从 ${((result.baseline_path_length_m - result.scan_segment_length_m) / 1000).toFixed(1)} km 降至 ${((result.path_length_m - result.scan_segment_length_m) / 1000).toFixed(1)} km。`
-			: '';
-		const comparisonText = result.map.baseline_waypoints?.length ? '地图中的橙色虚线标出被替换的旧航段。' : '';
-		return `已在右侧显示搜索航线：航程 ${(result.path_length_m / 1000).toFixed(2)} km，${changeText}；预计覆盖率 ${result.planned_coverage_percent.toFixed(1)}%。${connectorText}${comparisonText}${sourceText}`;
-	}
-	return `已生成海域扫描航线：${startText}扫描航程 ${(result.path_length_m / 1000).toFixed(1)} km，预计覆盖率 ${result.planned_coverage_percent.toFixed(1)}%，预计耗时 ${result.estimated_duration_hours?.toFixed(1) ?? '—'} 小时。${endText}${regionText}${sourceText}如需查看航线规划方案，可点击右侧“分析当前方案”。`;
 }
 
 function MissionThinkingIndicator({ stopping = false, startedAt }: { stopping?: boolean; startedAt?: string }) {
@@ -254,14 +208,31 @@ function MissionContent() {
 	const [pinnedProjects, setPinnedProjects] = useState(() => readItemFlags('swarmbuddy.pinnedProjects'));
 	const [unreadProjects, setUnreadProjects] = useState(() => readItemFlags('swarmbuddy.unreadProjects'));
 	const [mapMode, setMapMode] = useState<'route' | 'terrain'>('route');
-	const [situationTab, setSituationTab] = useState<'overview' | 'execution' | 'targets' | 'analysis'>('overview');
+	const [progressCollapsed, setProgressCollapsed] = useState(false);
+	const [legendCollapsed, setLegendCollapsed] = useState(false);
+	const [situationTab, setSituationTab] = useState<'overview' | 'execution' | 'targets' | 'analysis' | 'game'>('overview');
 	const [scanResult, setScanResult] = useState<ScanResult | null>(null);
 	const [cooperation, setCooperation] = useState(simulationInitial);
+	const [missionAssignment, setMissionAssignment] = useState<MissionTaskAssignment | null>(null);
+	const [taskEvents, setTaskEvents] = useState<MissionTaskEvent[]>([]);
+	const [taskEventError, setTaskEventError] = useState<string | null>(null);
+	const [taskEventBusy, setTaskEventBusy] = useState(false);
+	const previousDroneModes = useRef<Record<string, string>>({});
+	const previousBoatModes = useRef<Record<string, string>>({});
+	const explicitReturns = useRef<Set<string>>(new Set());
+	const taskEventQueues = useRef<Record<string, Promise<unknown>>>({});
+	const [multiGridEnabled, setMultiGridEnabled] = useState(false);
+	const [multiGrid, setMultiGrid] = useState(multiGridInitial);
+	const [selectedUsvId, setSelectedUsvId] = useState('USV-01');
+	const [selectedMapObject, setSelectedMapObject] = useState<MissionMapSelection | null>(null);
+	const [manualTargetUavId, setManualTargetUavId] = useState<string | null>(null);
+	const [targetSelected, setTargetSelected] = useState(false);
+	const [targetFocusToken, setTargetFocusToken] = useState(0);
+	const [observationFocusPoint, setObservationFocusPoint] = useState<[number, number] | null>(null);
 	const [marineConditions, setMarineConditions] = useState<MarineConditions | null>(null);
 	const [marineObservations, setMarineObservations] = useState<MarineObservations | null>(null);
 	const [observationState, setObservationState] = useState<'idle' | 'loading' | 'ready' | 'unavailable' | 'error'>('idle');
 	const [coordinatePrefill, setCoordinatePrefill] = useState<ScanRequest | null>(null);
-	const [localScanMessages, setLocalScanMessages] = useState<Msg[]>([]);
 	const [startingScanAnalysis, setStartingScanAnalysis] = useState(false);
 	const [scanSpeedKnots, setScanSpeedKnots] = useState(() => readScanSpeed(agentId, sessionId));
 	const [scanDataName, setScanDataName] = useState<string | null>(null);
@@ -294,34 +265,7 @@ function MissionContent() {
 	const sidebarDialogInputRef = useRef<HTMLInputElement>(null);
 	const wasCredentialMode = useRef(credentialMode);
 
-	useEffect(() => { setScanResult(null); setMarineConditions(null); setMarineObservations(null); setCoordinatePrefill(null); setLocalScanMessages(readScanMessages(agentId, sessionId)); setScanSpeedKnots(readScanSpeed(agentId, sessionId)); }, [agentId, sessionId]);
-	useEffect(() => {
-		if (!agentId || !sessionId || !scanResult) return;
-		const stored = readScanMessages(agentId, sessionId);
-		const failedPairs: number[] = [];
-		for (let index = 0; index + 1 < stored.length; index++) {
-			if (stored[index].role !== 'user' || stored[index + 1].role !== 'assistant') continue;
-			if (!messageText(stored[index + 1]).startsWith('已识别经纬度，但自动规划未完成')) continue;
-			if (scanMatchesCoordinates(scanResult, parseChatScanCoordinates(messageText(stored[index])))) failedPairs.push(index);
-		}
-		if (failedPairs.length === 0) return;
-		const latest = failedPairs[failedPairs.length - 1];
-		const alreadyConfirmed = stored.some((message, index) => message.role === 'assistant'
-			&& messageText(message).startsWith('已生成海域扫描航线：')
-			&& index > 0 && scanMatchesCoordinates(scanResult, parseChatScanCoordinates(messageText(stored[index - 1]))));
-		const remove = new Set(failedPairs.flatMap((index) => alreadyConfirmed || index !== latest ? [index, index + 1] : []));
-		const next = stored.flatMap((message, index) => {
-			if (remove.has(index)) return [];
-			if (!alreadyConfirmed && index === latest + 1) {
-				const coordinates = parseChatScanCoordinates(messageText(stored[latest]));
-				const reply = scanSuccessReply(scanResult, Boolean(coordinates?.derivedBounds), coordinates?.radiusKm);
-				return [{ ...message, content: message.content.map((block) => block.type === 'text' ? { ...block, text: reply } : block) }];
-			}
-			return [message];
-		});
-		localStorage.setItem(scanMessageKey(agentId, sessionId), JSON.stringify(next));
-		setLocalScanMessages(next);
-	}, [agentId, sessionId, scanResult]);
+	useEffect(() => { setScanResult(null); setMarineConditions(null); setMarineObservations(null); setCoordinatePrefill(null); setScanSpeedKnots(readScanSpeed(agentId, sessionId)); }, [agentId, sessionId]);
 	useEffect(() => {
 		if (!agentId || !sessionId || !scanResult || scanResult.speed_knots === scanSpeedKnots) return;
 		let active = true;
@@ -353,13 +297,150 @@ function MissionContent() {
 		}).catch(() => {});
 		return () => { active = false; };
 	}, [agentId, sessionId, msgs.length, phase]);
-	const marineScanKey = scanResult ? `${scanResult.source}:${scanResult.bounds.west}:${scanResult.bounds.south}:${scanResult.bounds.east}:${scanResult.bounds.north}:${scanResult.path_length_m}` : '';
-	useEffect(() => { setCooperation(simulationInitial()); }, [agentId, sessionId, marineScanKey]);
+	const marineScanKey = scanResult ? `${scanResult.source}:${scanResult.bounds.west}:${scanResult.bounds.south}:${scanResult.bounds.east}:${scanResult.bounds.north}:${scanResult.path_length_m}:${scanResult.planner ?? ''}:${scanResult.map.routes?.map((route) => route.vessel_id).join(',') ?? ''}` : '';
+	const currentTaskId = missionAssignment?.mission_id ?? (scanResult && agentId && sessionId ? `plan:${agentId}:${sessionId}:${marineScanKey}` : null);
+	const scanResultForReset = useRef(scanResult);
+	useEffect(() => { scanResultForReset.current = scanResult; }, [scanResult]);
+	useEffect(() => { setCooperation(simulationInitial(scanResultForReset.current)); setMissionAssignment(null); setTaskEvents([]); setTaskEventError(null); setMultiGridEnabled(false); setMultiGrid(multiGridInitial()); setSelectedUsvId('USV-01'); setSelectedMapObject(null); setManualTargetUavId(null); setTargetSelected(false); setTargetFocusToken(0); setObservationFocusPoint(null); }, [agentId, sessionId, marineScanKey]);
+	useEffect(() => { if (agentId && sessionId) void missionScanApi.clearChatState(agentId, sessionId).catch(() => {}); }, [agentId, sessionId]);
+	useEffect(() => { setSelectedMapObject((current) => current?.mission_id === currentTaskId ? current : null); }, [currentTaskId]);
+	useEffect(() => {
+		if (!cooperation.fleet?.assigned || !agentId || !sessionId) { setMissionAssignment(null); return; }
+		let active = true;
+		void missionScanApi.assignFleet(agentId, sessionId, cooperation.fleet.selectedIds, cooperation.fleet.assignmentId ?? '').then((assignment) => {
+			if (!active) return;
+			setMissionAssignment(assignment);
+			setTaskEvents(Object.values(assignment.events).reverse());
+			setTaskEventError(null);
+			setCooperation((current) => current.fleet?.assigned ? { ...current, fleet: { ...current.fleet, agentCoordination: true } } : current);
+		}).catch((error) => { if (active) setTaskEventError(error instanceof Error ? error.message : 'Agent 协同初始化失败'); });
+		return () => { active = false; };
+	}, [agentId, sessionId, marineScanKey, cooperation.fleet?.assigned, cooperation.fleet?.assignmentId, cooperation.fleet?.selectedIds]);
+	const postTaskEvent = useCallback(async (senderId: string, eventType: string, position: FleetPoint, payload: Record<string, unknown> = {}) => {
+		if (!agentId || !sessionId || !missionAssignment) throw new Error('Agent 协同任务尚未就绪');
+		const request = {
+			event_id: crypto.randomUUID(), mission_id: missionAssignment.mission_id,
+			sender_id: senderId, event_type: eventType, timestamp: new Date().toISOString(),
+			position, payload,
+		};
+		// Preserve each UAV's return -> returned order even across network delays.
+		const pending = taskEventQueues.current[senderId] ?? Promise.resolve();
+		const submitted = pending.catch(() => {}).then(() => missionScanApi.submitFleetEvent(agentId, sessionId, request));
+		taskEventQueues.current[senderId] = submitted;
+		const event = await submitted;
+		setTaskEvents((current) => [event, ...current.filter((item) => item.event_id !== event.event_id)].slice(0, 40));
+		setTaskEventError(event.status === 'rejected' ? event.chain.at(-1)?.detail ?? '任务事件被拒绝' : null);
+		return event;
+	}, [agentId, sessionId, missionAssignment]);
+	const taskFailure = useCallback((error: unknown) => setTaskEventError(error instanceof Error ? error.message : 'Agent 协同服务暂不可用'), []);
+	const releaseMissionUav = useCallback((carrierId: string) => {
+		const fleet = cooperation.fleet;
+		const boat = fleet?.boats.find((item) => item.id === carrierId);
+		const drone = fleet?.drones.find((item) => item.carrierId === carrierId);
+		if (!boat || !drone || !missionAssignment) return;
+		setTaskEventBusy(true);
+		void postTaskEvent(drone.id, 'UAV_RELEASED', boat.position).then((event) => {
+			if (event.status === 'completed') setCooperation((current) => current.fleet ? { ...current, fleet: releaseFleetUav(current.fleet, carrierId, current.second) } : current);
+		}).catch(taskFailure).finally(() => setTaskEventBusy(false));
+	}, [cooperation.fleet, missionAssignment, postTaskEvent, taskFailure]);
+	const reportMissionTarget = useCallback((droneId: string) => {
+		const drone = cooperation.fleet?.drones.find((item) => item.id === droneId);
+		if (!drone || !missionAssignment) return;
+		setTaskEventBusy(true);
+		void postTaskEvent(droneId, 'TARGET_SUSPECTED', drone.position, { mission_paused: !cooperation.running }).then((event) => {
+			if (event.status !== 'completed' && event.status !== 'deferred') return;
+			setCooperation((current) => {
+				if (!current.fleet) return current;
+				let fleet = reportFleetObservation(current.fleet, droneId, current.second, event.timestamp, event.event_id, event.recipient_ids);
+				for (const action of event.actions) if (action.boat_id && (action.action === 'verify' || action.action === 'pause')) fleet = respondFleetObservation(fleet, action.boat_id, event.event_id, action.action, current.second);
+				return { ...current, fleet };
+			});
+		}).catch(taskFailure).finally(() => setTaskEventBusy(false));
+	}, [cooperation.fleet, cooperation.running, missionAssignment, postTaskEvent, taskFailure]);
+	const respondMissionObservation = useCallback((boatId: string, observationId: string, action: 'pause' | 'verify' | 'continue') => {
+		const fleet = cooperation.fleet;
+		const boat = fleet?.boats.find((item) => item.id === boatId);
+		const observation = fleet?.observations.find((item) => item.id === observationId);
+		if (!boat || !observation || !missionAssignment) return;
+		const eventType = action === 'pause' ? 'MISSION_PAUSED' : action === 'verify' ? 'VERIFY_REQUESTED' : 'MISSION_RESUMED';
+		setTaskEventBusy(true);
+		void postTaskEvent(boatId, eventType, action === 'verify' ? observation.position : boat.position, { observation_id: observationId }).then((event) => {
+			if (event.status === 'completed') setCooperation((current) => current.fleet ? { ...current, fleet: respondFleetObservation(current.fleet, boatId, observationId, action, current.second) } : current);
+		}).catch(taskFailure).finally(() => setTaskEventBusy(false));
+	}, [cooperation.fleet, missionAssignment, postTaskEvent, taskFailure]);
+	const commandMissionUav = useCallback((id: string, command: FleetUavCommand, values?: { speedMps?: number; headingDegrees?: number; altitudeM?: number; target?: FleetPoint | null }) => {
+		const drone = cooperation.fleet?.drones.find((item) => item.id === id);
+		if (!drone || !missionAssignment) return;
+		if (command === 'return' && missionAssignment) {
+			void postTaskEvent(id, 'UAV_RETURNING', drone.position).then((event) => {
+				if (event.status === 'completed') { explicitReturns.current.add(id); setCooperation((current) => current.fleet ? { ...current, fleet: commandFleetUav(current.fleet, id, command, current.second, values) } : current); }
+			}).catch(taskFailure);
+			return;
+		}
+		void postTaskEvent(id, 'UAV_COMMAND_REQUESTED', drone.position, { command, ...values }).then((event) => {
+			if (event.status === 'completed') setCooperation((current) => current.fleet ? { ...current, fleet: commandFleetUav(current.fleet, id, command, current.second, values) } : current);
+		}).catch(taskFailure);
+	}, [cooperation.fleet, missionAssignment, postTaskEvent, taskFailure]);
+	const toggleMissionSimulation = useCallback(() => {
+		if (!scanResult || (cooperation.fleet && !missionAssignment)) return;
+		const pausing = cooperation.running;
+		setCooperation((current) => current.running ? pauseSimulation(current) : startSimulation(current, scanResult));
+		if (missionAssignment) void postTaskEvent('coordinator', pausing ? 'MISSION_PAUSED' : 'MISSION_RESUMED', [0, 0]).catch(taskFailure);
+	}, [scanResult, cooperation.fleet, cooperation.running, missionAssignment, postTaskEvent, taskFailure]);
+	useEffect(() => {
+		if (!missionAssignment || !cooperation.fleet) { previousDroneModes.current = {}; return; }
+		const nextModes: Record<string, string> = {};
+		for (const drone of cooperation.fleet.drones) {
+			const previous = previousDroneModes.current[drone.id];
+			nextModes[drone.id] = drone.mode;
+			if (previous && previous !== 'return' && drone.mode === 'return') {
+				if (explicitReturns.current.delete(drone.id)) continue;
+				void postTaskEvent(drone.id, drone.battery <= 35 ? 'UAV_LOW_BATTERY' : 'UAV_RETURNING', drone.position, { battery: drone.battery }).catch(taskFailure);
+			}
+			if (previous === 'return' && drone.mode === 'deck') {
+				void postTaskEvent(drone.id, 'UAV_RETURNED', drone.position).catch(taskFailure);
+			}
+		}
+		previousDroneModes.current = nextModes;
+	}, [cooperation.fleet, missionAssignment, postTaskEvent, taskFailure]);
+	useEffect(() => {
+		if (!missionAssignment || !cooperation.fleet) { previousBoatModes.current = {}; return; }
+		const nextModes: Record<string, string> = {};
+		for (const boat of cooperation.fleet.boats) {
+			const previous = previousBoatModes.current[boat.id];
+			nextModes[boat.id] = boat.mode;
+			if (previous === 'verify' && boat.mode === 'paused' && boat.observationId) {
+				void postTaskEvent(boat.id, 'VERIFY_COMPLETED', boat.position, { observation_id: boat.observationId }).catch(taskFailure);
+			}
+		}
+		previousBoatModes.current = nextModes;
+	}, [cooperation.fleet, missionAssignment, postTaskEvent, taskFailure]);
+	useEffect(() => {
+		if (!multiGridEnabled || !scanResult || cooperation.second - multiGrid.lastSecond < .2) return;
+		setMultiGrid((current) => advanceMultiGrid(current, simulationAssets(scanResult, cooperation), cooperation.second));
+	}, [multiGridEnabled, multiGrid.lastSecond, scanResult, cooperation]);
+	useEffect(() => {
+		if (cooperation.second === 0 && multiGrid.lastSecond > 0) setMultiGrid(multiGridInitial());
+	}, [cooperation.second, multiGrid.lastSecond]);
+	const multiGridStats = multiGridSummary(multiGrid);
+	const focusTrainingTarget = useCallback(() => { if (currentTaskId) setSelectedMapObject({ kind: 'target', id: 'latest', mission_id: currentTaskId }); setObservationFocusPoint(null); setTargetSelected(true); setTargetFocusToken((value) => value + 1); }, [currentTaskId]);
+	const focusObservation = useCallback((point: [number, number]) => { if (currentTaskId) setSelectedMapObject({ kind: 'target', id: 'latest', mission_id: currentTaskId }); setObservationFocusPoint(point); setTargetSelected(true); setTargetFocusToken((value) => value + 1); }, [currentTaskId]);
 	useEffect(() => {
 		if (!cooperation.running || !scanResult || phase !== 'idle') return;
-		const timer = window.setInterval(() => setCooperation(advanceSimulation), 1000);
-		return () => window.clearInterval(timer);
-	}, [cooperation.running, scanResult, phase]);
+		let frame = 0;
+		let lastUpdate = 0;
+		const animate = (now: number) => {
+			if (!lastUpdate) lastUpdate = now;
+			const elapsed = (now - lastUpdate) / 1000;
+			if (elapsed >= 1 / 30) {
+				lastUpdate = now;
+				setCooperation((current) => advanceSimulation(current, elapsed, scanResult, scanSpeedKnots));
+			}
+			frame = window.requestAnimationFrame(animate);
+		};
+		frame = window.requestAnimationFrame(animate);
+		return () => window.cancelAnimationFrame(frame);
+	}, [cooperation.running, scanResult, scanSpeedKnots, phase]);
 	useEffect(() => {
 		setMarineConditions(null);
 		if (!agentId || !sessionId || !marineScanKey || scanResult?.source === 'demo') {
@@ -381,7 +462,7 @@ function MissionContent() {
 	}, [agentId, sessionId, marineScanKey, scanResult?.source]);
 	useEffect(() => {
 		setMarineObservations(null);
-		if (!agentId || !sessionId || !marineScanKey || scanResult?.source === 'demo') {
+		if (!agentId || !sessionId || !marineScanKey) {
 			setObservationState('idle');
 			return;
 		}
@@ -454,7 +535,7 @@ function MissionContent() {
 		return () => {
 			if (conversationScrollFrame.current !== null) cancelAnimationFrame(conversationScrollFrame.current);
 		};
-	}, [msgs, localScanMessages]);
+	}, [msgs]);
 	const handleConversationScroll = () => {
 		const panel = conversationRef.current;
 		if (!panel) return;
@@ -508,7 +589,7 @@ function MissionContent() {
 	const hasModel = Boolean(activeSession?.session.config.chat_model_config?.model);
 	const lastUserIndex = msgs.findLastIndex((message) => message.role === 'user');
 	const lastAssistant = msgs.slice(lastUserIndex + 1).findLast((message) => message.role === 'assistant');
-	const displayMsgs = useMemo(() => [...msgs, ...localScanMessages].sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime()), [msgs, localScanMessages]);
+	const displayMsgs = msgs;
 	// 每次流式更新只线性扫描一次历史消息，避免逐条回溯造成平方级开销。
 	const previousUserById = useMemo(() => {
 		const previous = new Map<string, Msg>();
@@ -535,7 +616,7 @@ function MissionContent() {
 		credential_id: defaultChoice.credentialId,
 		model: defaultChoice.model.name,
 		parameters: {
-			...(Object.hasOwn(defaultProperties, 'thinking_enable') ? { thinking_enable: false } : {}),
+			...(Object.hasOwn(defaultProperties, 'thinking_enable') ? { thinking_enable: true } : {}),
 			...(defaultChoice.type === 'dashscope_credential' && Object.hasOwn(defaultProperties, 'search_enable') ? { search_enable: false } : {}),
 		},
 	} : null;
@@ -546,15 +627,39 @@ function MissionContent() {
 		&& choice.credentialId === activeSession?.session.config.chat_model_config?.credential_id
 		&& choice.model.name === activeSession?.session.config.chat_model_config?.model);
 	const supportsScanImage = Boolean(activeModel?.model.input_types.some((type) => type === '*/*' || type.startsWith('image/')));
-	const sendWithCurrentScan = useCallback(async (blocks: ContentBlock[]) => {
-		const result = scanResult ?? (agentId && sessionId ? await missionScanApi.get(agentId, sessionId).catch(() => null) : null);
+	const sendWithCurrentScan = useCallback(async (blocks: ContentBlock[], selectionOverride?: MissionMapSelection | null) => {
+		const result = agentId && sessionId ? await missionScanApi.get(agentId, sessionId).catch((error: unknown) => {
+			if (error instanceof ApiError && error.status === 404) return null;
+			throw error;
+		}) : null;
 		if (!result) {
-			await send(blocks);
+			const now = new Date().toISOString();
+			const missing: TextBlock = { id: crypto.randomUUID(), type: 'text', created_at: now,
+				text: `[SwarmBuddyMissionContext JSON]\n${JSON.stringify({ mission_id: null, scan_status: 'not_found', simulation_status: 'unavailable', selected: null })}\n当前会话没有已保存的扫描方案；请调用 ReadOceanScanResult 核实，不要引用其他会话或猜测资产状态。` };
+			await send([...blocks, missing]);
 			return;
 		}
+		const currentSelection = (selectionOverride ?? selectedMapObject)?.mission_id === currentTaskId ? (selectionOverride ?? selectedMapObject) : null;
+		let stateContext: object = { mission_id: currentTaskId, selected: currentSelection ? { kind: currentSelection.kind, id: currentSelection.id } : null, simulation_status: 'unavailable' };
+		if (missionAssignment && cooperation.fleet?.assigned) {
+			const snapshot = buildMissionChatSnapshot(missionAssignment.mission_id, cooperation.fleet, currentSelection);
+			try {
+				await missionScanApi.saveChatState(agentId!, sessionId!, snapshot);
+				stateContext = { mission_id: snapshot.mission_id, selected: snapshot.selected,
+					simulation_status: 'ready', state_tool: 'ReadMissionSituation', scan_tool: 'ReadOceanScanResult',
+					labels: { assets: '仿真', observations: '仿真', progress: '仿真进度', planned_coverage_percent: '规划预计' } };
+			} catch {
+				await missionScanApi.clearChatState(agentId!, sessionId!);
+				stateContext = { mission_id: currentTaskId, selected: currentSelection ? { kind: currentSelection.kind, id: currentSelection.id } : null,
+					simulation_status: 'plan_mismatch', scan_tool: 'ReadOceanScanResult' };
+			}
+		} else await missionScanApi.clearChatState(agentId!, sessionId!);
 		const context = await createScanChatContextBlocks(result, mapFrameRef.current, supportsScanImage);
-		await send([...blocks, ...context]);
-	}, [agentId, sessionId, scanResult, send, supportsScanImage]);
+		const now = new Date().toISOString();
+		const structured: TextBlock = { id: crypto.randomUUID(), type: 'text', created_at: now,
+			text: `[SwarmBuddyMissionContext JSON]\n${JSON.stringify(stateContext)}\n位置、电量、训练目标和执行进度仅为仿真；覆盖率是规划预计。需要当前扫描指标时调用 ReadOceanScanResult，需要仿真状态时调用 ReadMissionSituation。` };
+		await send([...blocks, ...context, structured]);
+	}, [agentId, sessionId, missionAssignment, cooperation.fleet, selectedMapObject, currentTaskId, send, supportsScanImage]);
 	const canAnalyzeScan = Boolean(scanResult && sessionId && canSend && !startingScanAnalysis);
 	const analyzeScan = async () => {
 		if (!canAnalyzeScan || !agentId || !sessionId || !scanResult) return;
@@ -582,16 +687,14 @@ function MissionContent() {
 		}
 	};
 	const currentModel = activeSession?.session.config.chat_model_config?.model;
-	const recordScanReply = useCallback((input: string, reply: string) => {
-		if (!agentId || !sessionId) return;
+	const sendActionReport = useCallback(async (input: string, report: unknown, selection?: MissionMapSelection | null) => {
 		const now = new Date().toISOString();
-		const replyAt = new Date(Date.now() + 1).toISOString();
-		const user = UserMsg({ id: `local-scan-${crypto.randomUUID()}`, name: 'user', content: input, created_at: now });
-		const assistant = { ...AssistantMsg({ id: `local-scan-${crypto.randomUUID()}`, name: 'SwarmBuddy', content: reply, created_at: replyAt }), finished_at: replyAt };
-		const next = [...readScanMessages(agentId, sessionId), user, assistant].slice(-40);
-		localStorage.setItem(scanMessageKey(agentId, sessionId), JSON.stringify(next));
-		setLocalScanMessages(next);
-	}, [agentId, sessionId]);
+		await sendWithCurrentScan([
+			{ id: crypto.randomUUID(), type: 'text', text: input, created_at: now },
+			{ id: crypto.randomUUID(), type: 'text', created_at: now,
+				text: `[SwarmBuddyMissionContext JSON]\n${JSON.stringify({ action_result: report })}\n这是页面刚完成的操作回执。请结合当前任务数据自行回答用户，不要重复执行该操作，也不要逐字照抄回执。` },
+		], selection);
+	}, [sendWithCurrentScan]);
 	const sendWithScanCoordinates = useCallback(async (blocks: ContentBlock[]) => {
 		if (blocks.some((block) => block.type !== 'text')) {
 			await sendWithCurrentScan(blocks);
@@ -599,38 +702,75 @@ function MissionContent() {
 		}
 		const input = blocks.filter((block): block is TextBlock => block.type === 'text' && !block.text.startsWith('[File:'))
 			.map((block) => block.text).join('\n');
+		const locate = parseLocateRequest(input);
+		const currentSelection = selectedMapObject?.mission_id === currentTaskId ? selectedMapObject : null;
+		if (locate) {
+			let current: ScanResult | null;
+			try { current = agentId && sessionId ? await missionScanApi.get(agentId, sessionId) : null; }
+			catch (error) {
+				if (!(error instanceof ApiError && error.status === 404)) { await sendActionReport(input, '当前会话扫描结果读取失败，请检查后端服务后重试。'); return; }
+				current = null;
+			}
+			let verifiedFleet = null;
+			if (current && missionAssignment && cooperation.fleet?.assigned) {
+				try {
+					await missionScanApi.saveChatState(agentId!, sessionId!, buildMissionChatSnapshot(missionAssignment.mission_id, cooperation.fleet, currentSelection));
+					verifiedFleet = cooperation.fleet;
+				} catch { await sendActionReport(input, '当前仿真状态与该会话的扫描方案不匹配，无法可靠回答；请重新分配任务。'); return; }
+			}
+			if (locate) {
+				const found = locateMissionObject(locate, current, verifiedFleet);
+				if ('error' in found) { await sendActionReport(input, found.error); return; }
+				setSelectedMapObject(currentTaskId ? { kind: locate.kind, id: found.id, mission_id: currentTaskId } : null);
+				if (locate.kind === 'usv' || locate.kind === 'region') setSelectedUsvId(locate.id);
+				setObservationFocusPoint(found.position);
+				setTargetSelected(locate.kind === 'target');
+				setTargetFocusToken((value) => value + 1);
+				setResultHidden(false);
+				await sendActionReport(input, { operation: 'map_locate', status: 'completed', object_type: locate.kind,
+					object_id: found.id, position: found.position, position_coordinate_system: 'internal_map_xy_1000x625' },
+					currentTaskId ? { kind: locate.kind, id: found.id, mission_id: currentTaskId } : null);
+				return;
+			}
+		}
 		const asksAboutScan = /为什么|为何|怎么|如何|解释|分析|评价|是否|合理吗|多少|几个|哪里|什么原因/.test(input);
 		const explicitlyRequestsPlan = /(?:请|帮我|给我|直接|重新).{0,16}(?:生成|规划|重算|创建)/.test(input);
 		const optimizeRoute = /最优|优化|最短|更短|缩短/.test(input) && /路径|航线|扫描|搜索/.test(input) && (!asksAboutScan || explicitlyRequestsPlan);
 		const coordinates = asksAboutScan && !explicitlyRequestsPlan ? null : parseChatScanCoordinates(input);
 		if (!coordinates && optimizeRoute && agentId && sessionId) {
+			let report: unknown;
 			try {
 				const current = scanResult ?? await missionScanApi.get(agentId, sessionId).catch(() => null);
 				if (!current) {
-					recordScanReply(input, '请先指定扫描海域并生成航线，随后即可优化搜索路径。');
-					return;
+					report = { operation: 'route_optimization', status: 'not_started', reason: 'no_scan_plan' };
+				} else if (current.planner === 'darp_python') {
+					report = { operation: 'route_optimization', status: 'unsupported', planner: current.planner,
+						reason: 'DARP second-pass route optimization is not implemented; the existing plan is unchanged.' };
+				} else {
+					const next = await missionScanApi.create(agentId, sessionId, {
+						...current.bounds,
+						spacing_m: current.spacing_m,
+						obstacle_buffer_m: current.obstacle_buffer_m,
+						vessel_count: current.vessel_count ?? 3,
+						speed_knots: scanSpeedKnots,
+						start_point: current.start_point,
+						end_point: current.end_point,
+						use_requested_bounds: true,
+						allow_bounds_only: current.source === 'bounds_only',
+						use_demo: current.source === 'demo',
+						optimize_route: true,
+					});
+					setScanResult(next);
+					setResultHidden(false);
+					report = scanPlanReport(next);
 				}
-				const next = await missionScanApi.create(agentId, sessionId, {
-					...current.bounds,
-					spacing_m: current.spacing_m,
-					obstacle_buffer_m: current.obstacle_buffer_m,
-					speed_knots: scanSpeedKnots,
-					start_point: current.start_point,
-					end_point: current.end_point,
-					use_requested_bounds: true,
-					allow_bounds_only: current.source === 'bounds_only',
-					use_demo: current.source === 'demo',
-					optimize_route: true,
-				});
-				setScanResult(next);
-				setResultHidden(false);
-				recordScanReply(input, scanSuccessReply(next));
 			} catch (cause) {
 				const detail = cause instanceof ApiError && cause.status === 0
 					? `无法连接规划服务（当前地址：${getBaseUrl() || '未配置'}）。请在系统设置中核对服务器地址，本机后端应为 http://localhost:8000。`
 					: cause instanceof Error ? cause.message : '请稍后重试。';
-				recordScanReply(input, `路径优化未完成：${detail}`);
+				report = { operation: 'route_optimization', status: 'failed', reason: detail };
 			}
+			await sendActionReport(input, report);
 			return;
 		}
 		if (!coordinates || !agentId || !sessionId) {
@@ -646,7 +786,7 @@ function MissionContent() {
 			: null;
 		const bounds = coordinates.bounds ?? (reuseCurrent ? currentBounds : undefined) ?? inferred?.bounds;
 		if (coordinates.error || inferred?.error || !bounds) {
-			recordScanReply(input, coordinates.error ?? inferred?.error ?? '已识别经纬度，请补充扫描区域边界。');
+			await sendActionReport(input, coordinates.error ?? inferred?.error ?? '已识别经纬度，请补充扫描区域边界。');
 			return;
 		}
 		const previousStart = currentScan?.start_point;
@@ -664,15 +804,17 @@ function MissionContent() {
 			...(currentBounds && bounds.west === currentBounds.west && bounds.east === currentBounds.east && bounds.south === currentBounds.south && bounds.north === currentBounds.north
 				? { spacing_m: currentScan!.spacing_m, obstacle_buffer_m: currentScan!.obstacle_buffer_m }
 				: suggestScanParameters(bounds) ?? { spacing_m: DEFAULT_SCAN.spacing_m, obstacle_buffer_m: DEFAULT_SCAN.obstacle_buffer_m }),
+			vessel_count: currentScan?.vessel_count ?? DEFAULT_SCAN.vessel_count,
 			speed_knots: scanSpeedKnots,
 			start_point: startPoint,
 			end_point: endPoint,
 			use_requested_bounds: true,
-			allow_bounds_only: !hasImportedEnvironment,
-			optimize_route: optimizeRoute,
+			allow_bounds_only: !hasImportedEnvironment && !hasDemoCoastline(bounds),
+			optimize_route: false, // DARP currently has no second-pass route optimizer.
 		};
 		setCoordinatePrefill(request);
 		setResultHidden(false);
+		let report: unknown;
 		try {
 			let next: ScanResult;
 			try {
@@ -684,14 +826,15 @@ function MissionContent() {
 				next = saved;
 			}
 			setScanResult(next);
-			recordScanReply(input, scanSuccessReply(next, Boolean(coordinates.derivedBounds || inferred?.derivedBounds), coordinates.radiusKm));
+			report = scanPlanReport(next, Boolean(coordinates.derivedBounds || inferred?.derivedBounds), coordinates.radiusKm);
 		} catch (cause) {
 			const detail = cause instanceof ApiError && cause.status === 0
 				? `无法连接规划服务（当前地址：${getBaseUrl() || '未配置'}）。请检查设置中的服务器地址；本机启动时通常为 http://localhost:8000。`
 				: cause instanceof Error ? cause.message : '请检查区域与起终点。';
-			recordScanReply(input, `已识别经纬度，但自动规划未完成：${detail} 可在“重新规划”中调整后再试。`);
+			report = { operation: 'scan_planning', status: 'failed', reason: detail, requested_bounds: bounds };
 		}
-	}, [agentId, sessionId, scanResult, scanSpeedKnots, scanDataName, sendWithCurrentScan, recordScanReply]);
+		await sendActionReport(input, report);
+	}, [agentId, sessionId, scanResult, scanSpeedKnots, scanDataName, cooperation.fleet, missionAssignment, selectedMapObject, currentTaskId, sendWithCurrentScan, sendActionReport]);
 	useEffect(() => {
 		if (!pendingHomeMessage || pendingHomeMessage.sessionId !== sessionId || messagesLoading || homeMode) return;
 		setPendingHomeMessage(null);
@@ -1094,7 +1237,6 @@ function MissionContent() {
 							</div>
 						)}
 						{displayMsgs.map((message, index) => {
-							const isLocalScan = message.id.startsWith('local-scan-');
 							const text = messageText(message);
 							const previousUser = previousUserById.get(message.id);
 							const messageTime = new Date(message.created_at).getTime();
@@ -1113,7 +1255,7 @@ function MissionContent() {
 								<div className="user-message">
 									<MissionMessageContent content={message.content.filter((block) => !isScanContextBlock(block))} fallback="已发送附件" attachmentsFirst />
 									{!messageSelection && <div className="mission-user-footer">
-										{!isLocalScan && <MissionUserMessageActions text={text} canDelete={!isRunning} onQuote={() => setQuotedMessage(text.slice(0, 600))} onDelete={() => startMessageDeletion(msgs.findIndex((item) => item.id === message.id), message.id)} />}
+										<MissionUserMessageActions text={text} canDelete={!isRunning} onQuote={() => setQuotedMessage(text.slice(0, 600))} onDelete={() => startMessageDeletion(msgs.findIndex((item) => item.id === message.id), message.id)} />
 										{clock && <time className="mission-message-clock" dateTime={message.created_at} title={fullTime}>{clock}</time>}
 									</div>}
 								</div>
@@ -1128,7 +1270,7 @@ function MissionContent() {
 											<MissionToolCalls content={message.content} replyId={message.id} onUserConfirm={onUserConfirm} />
 										</div>
 										{!messageSelection && <div className="mission-assistant-footer">
-											{message.finished_at && !isLocalScan && <MissionMessageActions
+											{message.finished_at && <MissionMessageActions
 												messageId={message.id}
 												text={text}
 												canRegenerate={Boolean(previousUser && canSend)}
@@ -1143,7 +1285,7 @@ function MissionContent() {
 							);
 							return <Fragment key={message.id}>
 								{showTimeDivider && <div className="mission-time-divider"><time dateTime={message.created_at} title={fullTime}>{formatMissionDividerTime(message.created_at)}</time></div>}
-								{messageSelection && !isLocalScan && msgs.findIndex((item) => item.id === message.id) <= messageSelection.maxIndex ? (
+								{messageSelection && msgs.findIndex((item) => item.id === message.id) <= messageSelection.maxIndex ? (
 									<div className="mission-selectable-message">
 										<label className="mission-message-checkbox"><input type="checkbox" aria-label={`选择第 ${index + 1} 条消息`} checked={messageSelection.ids.has(message.id)} onChange={() => toggleMessageSelection(message.id)} /></label>
 										{renderedMessage}
@@ -1163,6 +1305,8 @@ function MissionContent() {
 						key={`${agentId ?? ''}:${sessionId ?? ''}`}
 							quote={quotedMessage}
 							onClearQuote={() => setQuotedMessage(null)}
+							selectedMapObject={selectedMapObject?.mission_id === currentTaskId ? `${selectedMapObject.kind.toUpperCase()} · ${selectedMapObject.id}` : null}
+							onClearMapObject={() => setSelectedMapObject(null)}
 						canSend={canSend}
 						isRunning={Boolean(sessionId && isRunning)}
 						phase={sessionId ? phase : 'idle'}
@@ -1190,9 +1334,9 @@ function MissionContent() {
 							resizeChatPanel((chatPanelRef.current?.getBoundingClientRect().width ?? 500) + (event.key === 'ArrowRight' ? 24 : -24));
 						}
 					}}><span aria-hidden="true" /></button>}
-					<div className="mission-situation-topbar"><div className="mission-situation-tabs" role="tablist" aria-label="态势看板栏目"><button type="button" role="tab" aria-selected={situationTab === 'overview'} className={situationTab === 'overview' ? 'active' : ''} onClick={() => setSituationTab('overview')}>海域态势</button><button type="button" role="tab" aria-selected={situationTab === 'execution'} className={situationTab === 'execution' ? 'active' : ''} onClick={() => setSituationTab('execution')}>任务执行</button><button type="button" role="tab" aria-selected={situationTab === 'targets'} className={situationTab === 'targets' ? 'active' : ''} onClick={() => setSituationTab('targets')}>目标识别</button><button type="button" role="tab" aria-selected={situationTab === 'analysis'} className={situationTab === 'analysis' ? 'active' : ''} onClick={() => setSituationTab('analysis')}>数据分析</button></div><div className="mission-situation-environment" aria-label="附近浮标实测" title={marineObservations?.station ? `NOAA NDBC 浮标 ${marineObservations.station.id}｜距航迹 ${marineObservations.station.distance_km} km｜观测时间 ${marineObservations.observed_at}｜坐标 [${marineObservations.station.longitude}, ${marineObservations.station.latitude}]` : marineObservations?.message ?? '根据当前航迹查询附近的近实时观测站'}><div className="mission-situation-environment-time"><MissionSituationClock /><span>{observationState === 'ready' ? '浮标实测' : observationState === 'loading' ? '查询实测中' : observationState === 'unavailable' ? '无附近实测' : observationState === 'error' ? '实测服务异常' : '待查询实测'}</span></div><div className="mission-situation-environment-values"><span>浪高：{marineObservations?.wave_height_m == null ? '—' : `${marineObservations.wave_height_m.toFixed(1)} m`}</span><span>能见度：{marineObservations?.visibility_km == null ? '—' : `${marineObservations.visibility_km.toFixed(1)} km`}</span><span>风速：{marineObservations?.wind_speed_ms == null ? '—' : `${marineObservations.wind_speed_ms.toFixed(1)} m/s`}</span></div></div></div>
+					<div className="mission-situation-topbar"><div className="mission-situation-tabs" role="tablist" aria-label="态势看板栏目"><button type="button" role="tab" aria-selected={situationTab === 'overview'} className={situationTab === 'overview' ? 'active' : ''} onClick={() => setSituationTab('overview')}>海域态势</button><button type="button" role="tab" aria-selected={situationTab === 'execution'} className={situationTab === 'execution' ? 'active' : ''} onClick={() => setSituationTab('execution')}>任务执行</button><button type="button" role="tab" aria-selected={situationTab === 'analysis'} className={situationTab === 'analysis' ? 'active' : ''} onClick={() => setSituationTab('analysis')}>数据分析</button><button type="button" role="tab" aria-selected={situationTab === 'targets'} className={situationTab === 'targets' ? 'active' : ''} onClick={() => setSituationTab('targets')}>目标识别</button><button type="button" role="tab" aria-selected={situationTab === 'game'} className={situationTab === 'game' ? 'active' : ''} onClick={() => setSituationTab('game')}>智能博弈</button></div><div className="mission-situation-environment" aria-label="海域天气" title={marineObservations?.station ? `NOAA NDBC 浮标 ${marineObservations.station.id}｜距航迹 ${marineObservations.station.distance_km} km｜观测时间 ${marineObservations.observed_at}` : marineObservations?.sample ? `${marineObservations.sample_kind === 'demo' ? '示例航迹坐标｜' : ''}预海天气｜坐标 [${marineObservations.sample.longitude}, ${marineObservations.sample.latitude}]｜天气实况 ${marineObservations.observed_at ?? '时间未知'}` : marineObservations?.message ?? '根据当前航迹查询海域天气'}><div className="mission-situation-environment-time"><MissionSituationClock /><span>{observationState === 'ready' ? marineObservations?.source === '预海天气' ? '天气实况' : '浮标实测' : observationState === 'loading' ? '查询海况中' : observationState === 'unavailable' ? '暂无海况' : observationState === 'error' ? '海况服务异常' : '待查询海况'}</span></div><div className="mission-situation-environment-values"><span>温度：{marineObservations?.temperature_c == null ? '—' : `${marineObservations.temperature_c.toFixed(1)} ℃`}</span><span>能见度：{marineObservations?.visibility_km == null ? '—' : `${marineObservations.visibility_km.toFixed(1)} km`}</span><span>风速：{marineObservations?.wind_speed_ms == null ? '—' : `${marineObservations.wind_speed_ms.toFixed(1)} m/s`}</span></div></div></div>
 					<header className="result-heading mission-situation-taskbar">
-						<div className="mission-situation-task-title"><span className="mission-situation-task-icon"><Compass size={16} aria-hidden="true" /></span><strong>海域扫描任务</strong><span className={`mission-situation-task-status ${scanResult ? 'ready' : ''}`}>{cooperation.running ? '协同仿真中' : cooperation.second ? '仿真已暂停或完成' : scanResult ? '规划已生成' : '待规划'}</span></div>
+						<div className="mission-situation-task-title"><span className="mission-situation-task-icon"><Compass size={16} aria-hidden="true" /></span><strong>海域扫描任务</strong></div>
 						<div className="map-controls">
 							{situationTab === 'overview' && <MissionScanPlanner agentId={agentId} sessionId={sessionId} result={scanResult} coordinatePrefill={coordinatePrefill} importedBounds={scanDataBounds} onSpeedChange={(speed) => { saveScanSpeed(agentId, sessionId, speed); setScanSpeedKnots(speed); }} onResult={(next) => { setScanResult(next); setMapMode('route'); if (next.source === 'demo') setScanDataName(null); }} />}
 							{situationTab === 'analysis' && <><button className="mission-scan-analyze" type="button" disabled={!canAnalyzeScan} title={!scanResult ? '请先生成航迹' : !hasModel ? '请先选择聊天模型' : isRunning ? '请等待当前回复完成' : '让当前模型分析右侧方案'} onClick={() => void analyzeScan()}><Sparkles size={15} aria-hidden="true" /><span>{startingScanAnalysis ? '正在发起…' : '分析当前方案'}</span></button><MissionScanDownloadSave result={scanResult} speedKnots={scanSpeedKnots} agentId={agentId} sessionId={sessionId} mapFrameRef={mapFrameRef} /></>}
@@ -1200,6 +1344,7 @@ function MissionContent() {
 								<option value="route">航迹视觉示意</option>
 								<option value="terrain">只看岛屿</option>
 							</select>
+							<button type="button" className={`mission-multigrid-button ${multiGridEnabled ? 'active' : ''}`} aria-label={multiGridEnabled ? '关闭 MultiGrid 网格试验' : '开启 MultiGrid 网格试验'} aria-pressed={multiGridEnabled} title="记录多艇经过网格的时间；这不是传感器探测覆盖率" disabled={!scanResult} onClick={() => { setMultiGrid(multiGridInitial(cooperation.second)); setMultiGridEnabled((value) => !value); }}><Grid3X3 size={14} /><span>网格试验</span></button>
 							<button
 								className="icon-button"
 								type="button"
@@ -1220,9 +1365,10 @@ function MissionContent() {
 							</button>
 						</div>
 					</header>
-					<div className="mission-situation-body">
+					{situationTab === 'game' ? <MissionGamePanel result={scanResult} /> : <>
+					<div className={`mission-situation-body ${expanded ? 'with-aside' : ''}`}>
 					<div ref={mapFrameRef} className={`map-frame ${mapMode === 'terrain' ? 'terrain-only' : ''}`}>
-						{scanResult ? <MissionScanMap result={scanResult} conditions={marineConditions} cooperation={cooperation} /> : <img
+						{scanResult ? <MissionScanMap result={scanResult} conditions={marineConditions} cooperation={cooperation} multiGrid={multiGridEnabled ? multiGrid : null} selectedUsvId={selectedUsvId} onSelectUsv={setSelectedUsvId} selectedMapObject={selectedMapObject?.mission_id === currentTaskId ? selectedMapObject : null} onSelectMapObject={(kind, id) => { if (currentTaskId) setSelectedMapObject({ kind, id, mission_id: currentTaskId }); }} targetSelected={targetSelected} onSelectTarget={focusTrainingTarget} targetFocusToken={targetFocusToken} focusPoint={observationFocusPoint} manualTargetUavId={manualTargetUavId} onManualTargetPoint={(target) => { const drone = cooperation.fleet?.drones.find((item) => item.id === manualTargetUavId); if (!drone || !missionAssignment) return; setTaskEventBusy(true); void postTaskEvent(drone.id, 'UAV_TARGET_REQUESTED', drone.position, { target_position: target }).then((event) => { if (event.status === 'completed') { setCooperation((current) => current.fleet ? { ...current, fleet: commandFleetUav(current.fleet, drone.id, 'manual', current.second, { target }) } : current); setManualTargetUavId(null); } }).catch(taskFailure).finally(() => setTaskEventBusy(false)); }} onCancelManualTarget={() => setManualTargetUavId(null)} onClearManualTarget={(id) => commandMissionUav(id, 'hover')} /> : <img
 							className="ocean-terrain"
 							src="/ocean/assets/h-theme/maps/deep-sea-terrain.png"
 							alt="岩岛与深海海浪组成的示意海域"
@@ -1272,11 +1418,16 @@ function MissionContent() {
 							</g>
 						</svg>}
 						<div className="map-vignette" />
-						<div className="mission-situation-map-progress" aria-label="扫描规划与仿真进度">
-							<div className="mission-progress-head"><strong>{cooperation.second ? '协同仿真' : '扫描规划'}</strong><b>{scanResult ? cooperation.second ? `${simulatedCoverage(cooperation)}%` : '已生成' : '待规划'}</b></div>
-							{scanResult && <>
-								<div className="mission-progress-track"><i style={{ width: `${cooperation.second ? simulatedCoverage(cooperation) : Math.min(100, Math.max(0, scanResult.planned_coverage_percent))}%` }} /></div>
-								<dl>{cooperation.second ? <>
+						{multiGridEnabled && <div className="mission-multigrid-stats" aria-label="MultiGrid 网格访问试验统计"><strong>MultiGrid · 仿真访问</strong><span>已访问 {multiGridStats.visitedCells} 格</span><span>多艇重叠 {multiGridStats.sharedCells} 格</span><small>累计艇时 {multiGridStats.vesselSeconds.toFixed(1)} 秒 · 非探测覆盖率</small></div>}
+						<div className={`mission-situation-map-progress ${progressCollapsed ? 'is-collapsed' : ''}`} aria-label="扫描规划与仿真进度">
+							<div className="mission-progress-head"><strong>{cooperation.fleet?.assigned || cooperation.second ? '任务进度' : '扫描规划'}</strong><b>{scanResult ? cooperation.fleet?.assigned || cooperation.second ? `${simulatedCoverage(cooperation)}%` : '已生成' : '待规划'}</b><button type="button" className="mission-overlay-toggle" aria-label={progressCollapsed ? '展开任务进度面板' : '折叠任务进度面板'} aria-expanded={!progressCollapsed} onClick={() => setProgressCollapsed((value) => !value)}><ChevronRight size={14} /></button></div>
+							{scanResult && !progressCollapsed && <>
+								<div className="mission-progress-track"><i style={{ width: `${cooperation.fleet?.assigned || cooperation.second ? simulatedCoverage(cooperation) : Math.min(100, Math.max(0, scanResult.planned_coverage_percent))}%` }} /></div>
+								<dl>{cooperation.fleet?.assigned ? <>
+									<div><dt><ScanLine size={12} />航迹执行</dt><dd>{simulatedCoverage(cooperation)}%</dd></div>
+									<div><dt><UavIcon width={12} height={12} />空中无人机</dt><dd>{cooperation.fleet.drones.filter((drone) => drone.mode !== 'deck').length} 架</dd></div>
+									<div><dt><UsvIcon width={12} height={12} />执行无人艇</dt><dd>{cooperation.fleet.boats.filter((boat) => boat.route.length).length} 艘</dd></div>
+								</> : cooperation.second ? <>
 									<div><dt><ScanLine size={12} />航迹执行</dt><dd>{simulatedCoverage(cooperation)}%</dd></div>
 									<div><dt><UavIcon width={12} height={12} />UAV 分区</dt><dd>{Math.round(cooperation.uavProgress * 100)}%</dd></div>
 									<div><dt><UsvIcon width={12} height={12} />USV 分区</dt><dd>{Math.round(cooperation.usvProgress * 100)}%</dd></div>
@@ -1288,24 +1439,23 @@ function MissionContent() {
 								</>}</dl>
 							</>}
 						</div>
-						<div className="map-legend mission-situation-legend" aria-label="海域扫描地图图例">
-							{mapMode === 'route' ? <>
-								<small className="mission-legend-note">{cooperation.second ? '载具与训练目标仿真' : '载具与目标示意'}</small>
+						<div className={`map-legend mission-situation-legend ${legendCollapsed ? 'is-collapsed' : ''}`} aria-label="海域扫描地图图例">
+							<button type="button" className="mission-overlay-toggle mission-legend-toggle" aria-label={legendCollapsed ? '展开地图图例' : '折叠地图图例'} title={legendCollapsed ? '展开图例' : '折叠图例'} aria-expanded={!legendCollapsed} onClick={() => setLegendCollapsed((value) => !value)}><ChevronRight size={13} /></button>
+							{!legendCollapsed && (mapMode === 'route' ? <>
 								<span><UavIcon className="mission-legend-uav" width={16} height={16} />无人机（UAV）</span>
 								<span><i className="mission-legend-target" aria-hidden="true" />目标位置</span>
 								<span><UsvIcon className="mission-legend-usv" width={16} height={16} />无人艇（USV）</span>
 								<span><i className="mission-legend-risk" aria-hidden="true" />高风险区域</span>
-								<span><i className="mission-legend-route" aria-hidden="true" />航迹路径</span>
 								<span><Radar className="mission-legend-radar" size={16} />雷达覆盖</span>
-								<span><i className="mission-legend-search" aria-hidden="true" />搜索区域</span>
-								<span><i className="mission-legend-waypoint" aria-hidden="true" />任务航点</span>
-							</> : <span><Compass size={16} />卫星岛屿</span>}
+								<span><i className="mission-legend-search" aria-hidden="true" />规划边界</span>
+							</> : <span><Compass size={16} />卫星岛屿</span>)}
 						</div>
 						{scanResult && <details className="mission-satellite-credit"><summary>影像来源</summary><span>EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2024)</span></details>}
 					</div>
-						<MissionSituationAside result={scanResult} cooperation={cooperation} onChange={setCooperation} />
+						{expanded && <MissionSituationAside result={scanResult} cooperation={cooperation} onChange={setCooperation} selectedUsvId={selectedUsvId} onSelectUsv={setSelectedUsvId} onSelectAsset={(kind, id) => { if (currentTaskId) setSelectedMapObject({ kind, id, mission_id: currentTaskId }); }} targetSelected={targetSelected} onSelectTarget={focusTrainingTarget} onFocusObservation={focusObservation} manualTargetUavId={manualTargetUavId} onArmManualTarget={setManualTargetUavId} taskAssignment={missionAssignment} taskEvents={taskEvents} taskEventError={taskEventError} taskEventBusy={taskEventBusy} onReleaseUav={releaseMissionUav} onReportTarget={reportMissionTarget} onRespondObservation={respondMissionObservation} onCommandUav={commandMissionUav} onToggleSimulation={toggleMissionSimulation} />}
 					</div>
 					<MissionScanSummary result={scanResult} speedKnots={scanSpeedKnots} portalDocument={frameDocument} cooperation={cooperation} />
+					</>}
 				</section>
 			</div>
 			{contextMenu && frameDocument && createPortal(

@@ -8,5 +8,11 @@ export const DEFAULT_SCAN: ScanRequest = {
 	north: 25.57,
 	spacing_m: 350,
 	obstacle_buffer_m: 40,
+	vessel_count: 3,
 	speed_knots: EXAMPLE_SCAN_SPEED_KNOTS,
 };
+
+export function hasDemoCoastline(bounds: Pick<ScanRequest, 'west' | 'south' | 'east' | 'north'>) {
+	return 118.5 <= bounds.west && bounds.west < bounds.east && bounds.east <= 124.8
+		&& 21.7 <= bounds.south && bounds.south < bounds.north && bounds.north <= 26.1;
+}

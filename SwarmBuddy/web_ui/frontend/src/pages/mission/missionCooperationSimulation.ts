@@ -1,13 +1,16 @@
+import { advanceFleet, assignFleetRoutes, fleetFinished, fleetInitial, fleetProgress } from './missionFleet';
+import type { FleetState } from './missionFleet';
 import type { ScanResult } from '@/api/missionScan';
 
 export type SimulationPoint = [number, number];
 export type SimulationAsset = {
-	id: 'UAV-01' | 'UAV-02' | 'UAV-03' | 'USV-01' | 'USV-02' | 'USV-03';
+	id: string;
 	kind: 'uav' | 'usv';
 	position: SimulationPoint;
 	progress: number;
-	status: '待命' | '搜索中' | '转场中' | '复核中' | '失联' | '已完成';
+	status: '待命' | '搜索中' | '转场中' | '复核中' | '失联' | '已完成' | '悬停中' | '返航中' | '待释放' | '已暂停';
 	assignment: string;
+	battery?: number;
 };
 export type SimulationEvent = { id: number; second: number; text: string };
 export type SimulationRiskArea = { id: string; center: SimulationPoint; polygon: SimulationPoint[] };
@@ -24,13 +27,41 @@ export type CooperationSimulation = {
 	targetStatus: 'none' | 'suspected' | 'confirmed';
 	verifyProgress: number;
 	events: SimulationEvent[];
+	fleet?: FleetState;
 };
 
 const cap = (value: number) => Math.max(0, Math.min(1, value));
 const point = (value: number[]): SimulationPoint => [value[0], value[1]];
+const KNOT_TO_METERS_PER_SECOND = 1852 / 3600;
+const DEMO_UAV_SPEED_METERS_PER_SECOND = 12;
 
-export function simulationInitial(): CooperationSimulation {
-	return { second: 0, running: false, uavProgress: 0, usvProgress: 0, transferProgress: 0, rescueProgress: 0, uavOffline: false, target: null, targetProgress: null, targetStatus: 'none', verifyProgress: 0, events: [] };
+export function formatMissionElapsed(seconds: number): string {
+	const total = Math.max(0, Math.floor(seconds));
+	return [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60].map((value) => String(value).padStart(2, '0')).join(':');
+}
+
+function plannedDistances(result: ScanResult): { usvMeters: number; uavMeters: number } {
+	const routeLengths = result.routes?.map((route) => route.path_length_m).filter((value) => Number.isFinite(value) && value > 0) ?? [];
+	const totalMeters = Number.isFinite(result.path_length_m) && result.path_length_m > 0 ? result.path_length_m : 1;
+	if (routeLengths.length) {
+		const longest = Math.max(...routeLengths);
+		return { usvMeters: longest, uavMeters: longest };
+	}
+	const waypoints = result.map.waypoints;
+	const split = routeSplit(waypoints);
+	let first = 0;
+	let full = 0;
+	for (let index = 1; index < waypoints.length; index++) {
+		const segment = length(waypoints[index - 1], waypoints[index]);
+		full += segment;
+		if (index <= split) first += segment;
+	}
+	const fraction = full > 0 ? first / full : .5;
+	return { usvMeters: Math.max(1, totalMeters * (1 - fraction)), uavMeters: Math.max(1, totalMeters * fraction) };
+}
+
+export function simulationInitial(result?: ScanResult | null): CooperationSimulation {
+	return { second: 0, running: false, uavProgress: 0, usvProgress: 0, transferProgress: 0, rescueProgress: 0, uavOffline: false, target: null, targetProgress: null, targetStatus: 'none', verifyProgress: 0, events: [], ...(result ? { fleet: fleetInitial(result) } : {}) };
 }
 
 function length(a: number[], b: number[]) {
@@ -54,6 +85,25 @@ export function routePoint(route: number[][], start: number, end: number, progre
 		remaining -= segment;
 	}
 	return point(route[to]);
+}
+
+export function routePrefix(route: number[][], progress: number): number[][] {
+	if (!route.length) return [];
+	if (progress <= 0) return [route[0]];
+	if (progress >= 1) return route;
+	let total = 0;
+	for (let index = 1; index < route.length; index++) total += length(route[index - 1], route[index]);
+	let remaining = total * cap(progress);
+	const prefix = [route[0]];
+	for (let index = 1; index < route.length; index++) {
+		const segment = length(route[index - 1], route[index]);
+		if (remaining >= segment) { prefix.push(route[index]); remaining -= segment; continue; }
+		const ratio = segment ? remaining / segment : 0;
+		prefix.push([route[index - 1][0] + (route[index][0] - route[index - 1][0]) * ratio,
+			route[index - 1][1] + (route[index][1] - route[index - 1][1]) * ratio]);
+		break;
+	}
+	return prefix;
 }
 
 export function routeSplit(route: number[][]) {
@@ -97,11 +147,21 @@ export function simulationRiskAreas(result: ScanResult): SimulationRiskArea[] {
 }
 
 function addEvent(state: CooperationSimulation, text: string): CooperationSimulation {
-	return { ...state, events: [{ id: state.second * 10 + state.events.length, second: state.second, text }, ...state.events].slice(0, 12) };
+	const second = Math.floor(state.second);
+	return { ...state, events: [{ id: second * 10 + state.events.length, second, text }, ...state.events].slice(0, 12) };
 }
 
-export function startSimulation(state: CooperationSimulation): CooperationSimulation {
+export function startSimulation(state: CooperationSimulation, result?: ScanResult | null): CooperationSimulation {
 	if (state.running) return state;
+	if (state.fleet) {
+		if (!state.fleet.assigned) return state;
+		if (fleetFinished(state.fleet) && result) {
+			const initial = fleetInitial(result);
+			const selected = { ...initial, selectedIds: state.fleet.selectedIds };
+			return { ...simulationInitial(result), running: true, fleet: assignFleetRoutes(selected, result, 0) };
+		}
+		return { ...state, running: true, fleet: { ...state.fleet, events: [{ id: Date.now(), second: Math.floor(state.second), text: state.second ? '继续执行扫描任务' : '开始执行扫描任务' }, ...state.fleet.events] } };
+	}
 	const finished = state.usvProgress >= 1 && (state.uavOffline ? state.rescueProgress >= 1 : state.uavProgress >= 1) && state.targetStatus !== 'suspected';
 	if (finished) return addEvent({ ...simulationInitial(), running: true }, '协同仿真重新开始');
 	return addEvent({ ...state, running: true }, state.second ? '继续协同仿真' : '仿真开始：UAV-01 与 USV-01 分区搜索');
@@ -124,16 +184,29 @@ export function injectSimulatedTarget(state: CooperationSimulation, route: numbe
 	return addEvent({ ...state, target, targetProgress, targetStatus: 'suspected' }, '训练目标已投放：待 USV-01 复核');
 }
 
-export function advanceSimulation(state: CooperationSimulation): CooperationSimulation {
-	if (!state.running) return state;
+export function advanceSimulation(state: CooperationSimulation, elapsedSeconds: number, result: ScanResult, speedKnots: number): CooperationSimulation {
+	if (!state.running || !Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return state;
+	if (state.fleet) {
+		const second = state.second + elapsedSeconds;
+		const fleet = advanceFleet(state.fleet, elapsedSeconds, speedKnots, result, second, state.fleet.agentCoordination ? null : state.target);
+		const targetConfirmed = state.target && fleet.observations.some((observation) => observation.verifiedBy && Math.hypot(observation.position[0] - state.target![0], observation.position[1] - state.target![1]) < 10);
+		const finished = fleetFinished(fleet);
+		const events = finished ? [{ id: Date.now(), second: Math.floor(second), text: '协同任务完成，所有 UAV 已在母艇' }, ...fleet.events] : fleet.events;
+		return { ...state, second, fleet: finished ? { ...fleet, events } : fleet, targetStatus: targetConfirmed ? 'confirmed' : state.targetStatus, usvProgress: fleetProgress(fleet) / 100, uavProgress: fleet.drones.length ? fleet.drones.filter((drone) => drone.mode === 'deck').length / fleet.drones.length : 0, running: !finished };
+	}
+	const { usvMeters, uavMeters } = plannedDistances(result);
+	const usvSpeed = Number.isFinite(speedKnots) && speedKnots > 0 ? speedKnots * KNOT_TO_METERS_PER_SECOND : 0;
+	const remainingUavMeters = uavMeters * (1 - state.uavProgress);
+	const transferMeters = usvMeters + remainingUavMeters;
+	const verificationMeters = (state.uavOffline ? 0 : usvMeters) + uavMeters * (1 - (state.targetProgress ?? 0));
 	const next: CooperationSimulation = {
 		...state,
-		second: state.second + 1,
-		uavProgress: state.uavOffline ? state.uavProgress : cap(state.uavProgress + 0.025),
-		usvProgress: cap(state.usvProgress + 0.02),
-		transferProgress: state.uavOffline && state.usvProgress >= 1 ? cap(state.transferProgress + 0.1) : state.transferProgress,
-		rescueProgress: state.uavOffline && state.transferProgress >= 1 ? cap(state.rescueProgress + 0.035) : state.rescueProgress,
-		verifyProgress: state.targetStatus === 'suspected' && state.usvProgress >= 1 && (!state.uavOffline || state.rescueProgress >= 1) ? cap(state.verifyProgress + 0.2) : state.verifyProgress,
+		second: state.second + elapsedSeconds,
+		uavProgress: state.uavOffline ? state.uavProgress : cap(state.uavProgress + DEMO_UAV_SPEED_METERS_PER_SECOND * elapsedSeconds / uavMeters),
+		usvProgress: cap(state.usvProgress + usvSpeed * elapsedSeconds / usvMeters),
+		transferProgress: state.uavOffline && state.usvProgress >= 1 ? cap(state.transferProgress + usvSpeed * elapsedSeconds / Math.max(transferMeters, 1)) : state.transferProgress,
+		rescueProgress: state.uavOffline && state.transferProgress >= 1 ? cap(state.rescueProgress + usvSpeed * elapsedSeconds / Math.max(remainingUavMeters, 1)) : state.rescueProgress,
+		verifyProgress: state.targetStatus === 'suspected' && state.usvProgress >= 1 && (!state.uavOffline || state.rescueProgress >= 1) ? cap(state.verifyProgress + usvSpeed * elapsedSeconds / Math.max(verificationMeters, 1)) : state.verifyProgress,
 	};
 	if (state.usvProgress < 1 && next.usvProgress >= 1) return addEvent(next, 'USV-01 完成原分区搜索');
 	if (state.uavOffline && state.transferProgress < 1 && next.transferProgress >= 1) return addEvent(next, 'USV-01 完成接替转场，开始搜索剩余区域');
@@ -146,7 +219,30 @@ export function advanceSimulation(state: CooperationSimulation): CooperationSimu
 }
 
 export function simulationAssets(result: ScanResult, state: CooperationSimulation): SimulationAsset[] {
+	if (state.fleet) {
+		return [
+			...state.fleet.boats.map((boat): SimulationAsset => ({ id: boat.id, kind: 'usv', position: boat.position, progress: boat.progress, battery: boat.battery, status: ({ idle: '待命', scan: state.running ? '搜索中' : '已暂停', paused: '已暂停', verify: '复核中', resume: '转场中', done: '已完成' } as const)[boat.mode], assignment: boat.routeIds.length ? `扫描航线 ${boat.routeIds.join('、')}` : '未分配任务' })),
+			...state.fleet.drones.map((drone): SimulationAsset => ({ id: drone.id, kind: 'uav', position: drone.position, progress: drone.mode === 'deck' ? 0 : 0.5, battery: drone.battery, status: ({ deck: '待释放', auto: '搜索中', manual: '转场中', hover: '悬停中', return: '返航中' } as const)[drone.mode], assignment: `搭载于 ${drone.carrierId}` })),
+		];
+	}
 	const route = result.map.waypoints;
+	if (result.map.routes?.length) {
+		const routeMeters = (item: { vessel_id: string; waypoints: number[][] }) => result.routes?.find((route) => route.vessel_id === item.vessel_id)?.path_length_m
+			?? item.waypoints.slice(1).reduce((total, next, index) => total + length(item.waypoints[index], next), 0);
+		const longest = Math.max(...result.map.routes.map(routeMeters), 1);
+		const boats: SimulationAsset[] = result.map.routes.map((item, index) => {
+			const distance = routeMeters(item);
+			const progress = cap(state.usvProgress * longest / Math.max(distance, 1));
+			return { id: item.vessel_id, kind: 'usv', position: routePoint(item.waypoints, 0, item.waypoints.length - 1, progress), progress,
+				status: (progress >= 1 ? '已完成' : state.running ? '搜索中' : '待命') as SimulationAsset['status'], assignment: `DARP 分区 ${index + 1}` };
+		});
+		const drones: SimulationAsset[] = result.map.routes.map((item, index) => {
+			const progress = state.uavProgress;
+			return { id: `UAV-${String(index + 1).padStart(2, '0')}`, kind: 'uav', position: routePoint(item.waypoints, 0, item.waypoints.length - 1, progress), progress,
+				status: (state.uavOffline && index === 0 ? '失联' : progress >= 1 ? '已完成' : state.running ? '搜索中' : '待命') as SimulationAsset['status'], assignment: '无人机演示航迹' };
+		});
+		return [...boats, ...drones];
+	}
 	const split = routeSplit(route);
 	const uavPosition = routePoint(route, 0, split, state.uavProgress);
 	let firstLength = 0;
@@ -169,17 +265,10 @@ export function simulationAssets(result: ScanResult, state: CooperationSimulatio
 	return [
 		{ id: 'UAV-01', kind: 'uav', position: uavPosition, progress: state.uavProgress, status: state.uavOffline ? '失联' : state.uavProgress >= 1 ? '已完成' : state.running ? '搜索中' : '待命', assignment: '前半区广域搜索' },
 		{ id: 'USV-01', kind: 'usv', position: verificationPosition, progress: state.uavOffline ? (state.usvProgress + state.rescueProgress) / 2 : state.usvProgress, status: state.verifyProgress > 0 && state.verifyProgress < 1 ? '复核中' : state.uavOffline && state.usvProgress >= 1 && state.transferProgress < 1 ? '转场中' : state.usvProgress >= 1 && (!state.uavOffline || state.rescueProgress >= 1) && state.targetStatus !== 'suspected' ? '已完成' : state.running ? '搜索中' : '待命', assignment: state.uavOffline ? '后半区搜索 + 接替 UAV' : '后半区重点搜索' },
-		...([0.18, 0.36] as const).map((offset, index): SimulationAsset => {
-			const progress = cap(state.uavProgress + offset * (1 - state.uavProgress));
-			return { id: index === 0 ? 'UAV-02' : 'UAV-03', kind: 'uav', position: routePoint(route, 0, split, progress), progress, status: progress >= 1 ? '已完成' : state.running ? '搜索中' : '待命', assignment: index === 0 ? '前半区岛屿巡查' : '前半区边界搜索' };
-		}),
-		...([0.22, 0.44] as const).map((offset, index): SimulationAsset => {
-			const progress = cap(state.usvProgress + offset * (1 - state.usvProgress));
-			return { id: index === 0 ? 'USV-02' : 'USV-03', kind: 'usv', position: routePoint(route, split, route.length - 1, progress), progress, status: progress >= 1 ? '已完成' : state.running ? '搜索中' : '待命', assignment: index === 0 ? '后半区近岸巡查' : '后半区边界搜索' };
-		}),
 	];
 }
 
 export function simulatedCoverage(state: CooperationSimulation) {
+	if (state.fleet) return fleetProgress(state.fleet);
 	return Math.round((state.uavOffline ? state.uavProgress + (1 - state.uavProgress) * state.rescueProgress : state.uavProgress) * 50 + state.usvProgress * 50);
 }

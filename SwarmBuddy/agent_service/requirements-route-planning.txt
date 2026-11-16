@@ -1,5 +1,7 @@
 # Install in SwarmBuddy/.venv for the ocean scan module.
 shapely>=2.0,<3
+numpy>=2.0,<3
+scipy>=1.14,<2
 networkx>=3.0,<4
 pyproj>=3.7,<3.8
 matplotlib>=3.8,<4

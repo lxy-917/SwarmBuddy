@@ -58,13 +58,29 @@ from browser_search import search_web
 from external_knowledge import CATALOG as PUBLIC_KNOWLEDGE_CATALOG, fetch_records as fetch_public_knowledge_records, search_catalog as search_public_knowledge_catalog
 from collaboration_pdf import render_collaboration_pdf
 from mission_scan import plan_scan, inspect_environment_data, environment_intersects_bounds
+from mission_task_agents import MissionTaskService
+from mission_model_advisor import make_advisor, make_refiner
+from mission_review import generate_peer_review
+from mission_chat_state import save_snapshot, read_snapshot
+from agentscope.app._service._model import get_model
 from marine_conditions import fetch_scan_marine_conditions
 from marine_observations import fetch_scan_observations
+from foreocean_conditions import fetch_scan_foreocean, get_foreocean_token
 from satellite_tiles import get_satellite_tile
 from public_skill_hubs import PublicGitHubSkillHub, SkillsShLinkHub
 
 
 SCAN_RESULTS_DIR = Path(__file__).resolve().parent / "scan_results"
+
+
+def fetch_configured_observations(scan_result):
+    """配置预海天气令牌后优先使用其经纬度接口，否则沿用附近浮标。"""
+    if get_foreocean_token():
+        result = fetch_scan_foreocean(scan_result)
+        if scan_result.get("source") == "demo":
+            result["sample_kind"] = "demo"
+        return result
+    return fetch_scan_observations(scan_result)
 
 
 class ScanRequest(BaseModel):
@@ -74,6 +90,7 @@ class ScanRequest(BaseModel):
     north: float = 25.57
     spacing_m: float = 350
     obstacle_buffer_m: float = 40
+    vessel_count: int = Field(default=3, ge=1, le=8)
     speed_knots: float | None = None
     start_point: list[float] | None = None
     end_point: list[float] | None = None
@@ -91,6 +108,28 @@ class ScanEnvironmentRequest(BaseModel):
 
 class ScanSpeedRequest(BaseModel):
     speed_knots: float
+
+
+class MissionAssignRequest(BaseModel):
+    selected_ids: list[str] = Field(min_length=1, max_length=8)
+    assignment_key: str = Field(min_length=1, max_length=100)
+
+
+class MissionTaskEventRequest(BaseModel):
+    event_id: str = Field(min_length=1, max_length=100)
+    mission_id: str = Field(min_length=1)
+    sender_id: str = Field(min_length=1)
+    event_type: str = Field(min_length=1)
+    timestamp: str | None = None
+    position: list[float] = Field(min_length=2, max_length=2)
+    payload: dict = Field(default_factory=dict)
+
+
+class MissionChatSnapshotRequest(BaseModel):
+    mission_id: str = Field(min_length=1)
+    selected: dict | None = None
+    assets: list[dict] = Field(default_factory=list)
+    observations: list[dict] = Field(default_factory=list)
 
 
 class ProjectSkillRequest(BaseModel):
@@ -231,6 +270,11 @@ async def _read_scan_for_agent(
         "covered_area_m2": covered,
         "target_area_m2": target_area,
         "uncovered_area_m2": uncovered,
+        "routes": [{"vessel_id": route.get("vessel_id"),
+                    "planned_start_wgs84": ((route.get("route_geojson") or {}).get("coordinates") or [None])[0],
+                    "path_length_m": route.get("path_length_m"),
+                    "region_area_m2": route.get("region_area_m2")}
+                   for route in result.get("routes", [])],
     }
     if include_geometry:
         coordinates = result.get("route_geojson", {}).get("coordinates", [])
@@ -263,6 +307,10 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
             user_id, agent_id, session_id, include_geometry=include_geometry,
         )
 
+    async def read_mission_situation() -> dict:
+        """读取当前会话提交的艇机仿真状态和地图选中对象。位置、电量、进度与目标均为仿真，不能表述为真实作业结果。"""
+        return await asyncio.to_thread(read_snapshot, _scan_file(user_id, agent_id, session_id))
+
     async def read_ocean_conditions() -> dict:
         """查询当前会话扫描航迹附近的海况与天气模式预报。
 
@@ -281,15 +329,15 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
             return {"status": "unavailable", "message": str(exc)}
 
     async def read_ocean_observations() -> dict:
-        """查询当前扫描航迹 50 公里内、两小时内的浮标实测海况。"""
+        """查询预海天气的航迹位置天气实况，未配置时匹配附近浮标。"""
         target = _scan_file(user_id, agent_id, session_id)
         if not target.exists():
             return {"status": "not_found", "message": "当前会话还没有可定位观测站的扫描航迹"}
         result = json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
-        if result.get("source") == "demo":
+        if result.get("source") == "demo" and not get_foreocean_token():
             return {"status": "unavailable", "message": "示例地图不能用于匹配真实观测站"}
         try:
-            return await asyncio.to_thread(fetch_scan_observations, result)
+            return await asyncio.to_thread(fetch_configured_observations, result)
         except (ValueError, RuntimeError, OSError) as exc:
             return {"status": "unavailable", "message": str(exc)}
 
@@ -300,6 +348,7 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
         north: float = 25.57,
         spacing_m: float = 350,
         obstacle_buffer_m: float = 40,
+        vessel_count: int = 3,
         speed_knots: float | None = None,
         start_point: list[float] | None = None,
         end_point: list[float] | None = None,
@@ -315,11 +364,12 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
         扫描间距和避障距离使用米。用户指定中心点、半径或四边界时，先换算
         west、south、east、north，并设置 use_requested_bounds=True，使规划范围
         与已导入的搜索区域求交；起终点仅在用户明确指定时传入。
-        用户明确要求缩短、优化或生成更短搜索路径时，设置 optimize_route=True。
+        当前使用 DARP 多艇分区；optimize_route 参数暂保留兼容，尚未执行二次优化。
         """
         result = await _save_scan(user_id, agent_id, session_id, ScanRequest(
             west=west, south=south, east=east, north=north,
             spacing_m=spacing_m, obstacle_buffer_m=obstacle_buffer_m,
+            vessel_count=vessel_count,
             speed_knots=speed_knots,
             start_point=start_point, end_point=end_point,
             use_requested_bounds=use_requested_bounds,
@@ -329,7 +379,7 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
         return {key: result[key] for key in (
             "bounds", "path_length_m", "waypoint_count", "obstacle_count",
             "planned_coverage_percent", "validated", "baseline_path_length_m",
-            "route_optimized",
+            "route_optimized", "planner", "vessel_count", "routes",
         )}
 
     return [
@@ -341,6 +391,13 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
                 behavior=PermissionBehavior.ALLOW,
                 message="Read the saved scan result for this session.",
             ),
+        ),
+        FunctionTool(
+            read_mission_situation,
+            name="ReadMissionSituation",
+            is_read_only=True,
+            permission=PermissionDecision(behavior=PermissionBehavior.ALLOW,
+                                          message="Read only the current session's validated simulation snapshot."),
         ),
         FunctionTool(
             read_ocean_conditions,
@@ -357,7 +414,7 @@ async def mission_scan_tools(user_id: str, agent_id: str, session_id: str):
             is_read_only=True,
             permission=PermissionDecision(
                 behavior=PermissionBehavior.ALLOW,
-                message="读取当前扫描海域附近浮标的近期实测海况。",
+                message="读取当前扫描海域的预海天气实况或附近浮标观测。",
             ),
         ),
         FunctionTool(
@@ -428,8 +485,11 @@ SWARMBUDDY_AGENT_GUIDANCE = """# 角色与目标
 # 当前海域扫描方案
 
 - 当用户询问右侧地图、当前海域扫描结果、当前航线或规划指标时，先调用只读工具 `ReadOceanScanResult`，以当前会话保存的结果为依据。不要仅凭聊天记录、截图或先前的结果判断当前方案。
+- 当用户询问 USV/UAV 的当前位置、电量、任务状态、仿真进度、训练目标来源或地图选中对象时，调用只读工具 `ReadMissionSituation`。只使用当前会话且与当前任务 ID 匹配的快照；没有快照时明确说明。位置、电量、目标和执行进度均是仿真，覆盖率是规划预计，不能称为实际作业结果。地图定位请求由页面处理，不调用规划工具。
+- 对方案优劣、任务进展或艇机协同的开放问题，结合 `ReadOceanScanResult` 与 `ReadMissionSituation` 的返回值推理，说明依据、不确定性及可执行的改进建议；不要套用固定句式或把工具值机械罗列。只有规划值时不要推断实际执行情况。
+- 用户消息中的 `SwarmBuddyMissionContext` 若含 `action_result`，表示页面刚完成定位或规划操作的回执。结合该回执与只读工具自行组织回答；不要照抄回执，不要为回答再次执行同一操作。操作失败时说明原因和可行的下一步，不要声称操作成功。
 - 当用户询问当前海域的浪高、风速、能见度或海况天气时，调用 `ReadOceanConditions`。返回的是沿已保存扫描航迹采样的模式预报；说明有效时间与采样数量，不把预报当作现场实测，也不凭岛礁轮廓推断实时海况。
-- 当用户要求实时或实测海况时，优先调用 `ReadOceanObservations`。只有邻近观测站和观测时间都符合工具返回条件时才报告实测值；无站点或缺测就明确说明，不用 `ReadOceanConditions` 的模式预报冒充实测。
+- 当用户要求实时或实测海况时，优先调用 `ReadOceanObservations`。若来源为预海天气，温度、风速与能见度来自天气实况接口，说明接口给出的数据时间；若来源为 NOAA NDBC，仅在邻近观测站和观测时间符合条件时报告浮标实测。无数据时明确说明，不用 `ReadOceanConditions` 的模式预报冒充实测。
 - 读取结果后，核对它是否对应用户当前提出的区域和参数。若用户只是要求解释或评估当前方案，不调用 `PlanOceanScan`。
 - 仅在用户要求生成或重新规划、当前结果与请求不符，且具备所需参数与工具能力时，调用 `PlanOceanScan`。如果界面已自动生成符合请求的方案，直接使用已保存结果。
 - 用户提供中心经纬度与半径并要求扫描时，应把半径换算为 WGS84 东西南北边界，四位小数向外取整，明确这是矩形包围框；调用 `PlanOceanScan` 时设置 `use_requested_bounds=True`，让边界与会话已导入的 GeoJSON 搜索区域求交。不要只给出换算过程而不生成用户要求的扫描结果。未指定起点或终点时，不擅自把中心点当作起点。
@@ -566,6 +626,8 @@ app = create_app(
     ],
 )
 
+mission_task_service = MissionTaskService(app.state.message_bus)
+
 
 async def _project_skill_workspace(request: Request, user_id: str, agent_id: str):
     # 项目技能写入 Agent 专属分区；没有会话时也能初始化该工作区。
@@ -646,6 +708,108 @@ async def get_mission_scan(
     return json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
 
 
+@app.post("/mission/scan/{session_id}/fleet/assign")
+async def assign_mission_fleet(
+    session_id: str,
+    body: MissionAssignRequest,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    try:
+        return await mission_task_service.assign(
+            _scan_file(user_id, agent_id, session_id), body.selected_ids,
+            body.assignment_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/mission/scan/{session_id}/fleet")
+async def get_mission_fleet(
+    session_id: str,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    state = mission_task_service.get(_scan_file(user_id, agent_id, session_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="当前会话尚未分配仿真协同任务")
+    return state
+
+
+@app.post("/mission/scan/{session_id}/fleet/events")
+async def submit_mission_task_event(
+    session_id: str,
+    body: MissionTaskEventRequest,
+    request: Request,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    try:
+        advisor = None
+        model = None
+        if body.event_type == "TARGET_SUSPECTED":
+            try:
+                session = await request.app.state.storage.get_session(
+                    user_id, agent_id, session_id,
+                )
+                config = session.config.chat_model_config if session else None
+                if config is not None:
+                    try:
+                        model = await asyncio.wait_for(get_model(
+                            user_id, config, request.app.state.resource_access_service,
+                        ), timeout=2)
+                        advisor = make_advisor(model)
+                    except Exception:
+                        async def unavailable_advisor(_asset, _event):
+                            raise RuntimeError("AgentScope 模型不可用")
+                        advisor = unavailable_advisor
+            except Exception:
+                # Missing model/session does not stop the simulated mission.
+                advisor = None
+        scan_file = _scan_file(user_id, agent_id, session_id)
+        reviewer = (lambda record: generate_peer_review(model, record)) if model else None
+        refiner = make_refiner(model) if model else None
+        return await mission_task_service.process(
+            scan_file, body.model_dump(), advisor, reviewer, refiner,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/mission/scan/{session_id}/chat-state")
+async def update_mission_chat_state(
+    session_id: str,
+    body: MissionChatSnapshotRequest,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    try:
+        return await asyncio.to_thread(
+            save_snapshot, _scan_file(user_id, agent_id, session_id), body.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/mission/scan/{session_id}/chat-state")
+async def get_mission_chat_state(
+    session_id: str,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    return await asyncio.to_thread(read_snapshot, _scan_file(user_id, agent_id, session_id))
+
+
+@app.delete("/mission/scan/{session_id}/chat-state")
+async def clear_mission_chat_state(
+    session_id: str,
+    agent_id: str = Query(min_length=1),
+    user_id: str = Header(alias="X-User-ID"),
+):
+    await asyncio.to_thread(_scan_file(user_id, agent_id, session_id).with_suffix(".chat-state.json").unlink, missing_ok=True)
+    return {"status": "cleared"}
+
+
 @app.get("/mission/scan/{session_id}/conditions")
 async def get_mission_scan_conditions(
     session_id: str,
@@ -673,15 +837,15 @@ async def get_mission_scan_observations(
     agent_id: str = Query(min_length=1),
     user_id: str = Header(alias="X-User-ID"),
 ):
-    """按当前扫描航迹匹配近期浮标实测，缺测时返回 unavailable。"""
+    """按扫描航迹获取预海天气实况，未配置令牌时匹配近期浮标。"""
     target = _scan_file(user_id, agent_id, session_id)
     if not target.exists():
         raise HTTPException(status_code=404, detail="当前会话尚无可定位的扫描航迹")
     scan_result = json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
-    if scan_result.get("source") == "demo":
+    if scan_result.get("source") == "demo" and not get_foreocean_token():
         raise HTTPException(status_code=422, detail="示例地图不能用于匹配真实观测站")
     try:
-        return await asyncio.to_thread(fetch_scan_observations, scan_result)
+        return await asyncio.to_thread(fetch_configured_observations, scan_result)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -725,7 +889,8 @@ async def update_mission_scan_speed(
         raise HTTPException(status_code=404, detail="当前会话还没有扫描规划结果")
     result = json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
     result["speed_knots"] = request.speed_knots
-    result["estimated_duration_hours"] = round(result["path_length_m"] / (request.speed_knots * 1852), 4)
+    longest_route = max((route["path_length_m"] for route in result.get("routes", [])), default=result["path_length_m"])
+    result["estimated_duration_hours"] = round(longest_route / (request.speed_knots * 1852), 4)
     await asyncio.to_thread(target.write_text, json.dumps(result, ensure_ascii=False), "utf-8")
     return result
 

@@ -1,6 +1,6 @@
 # SwarmBuddy
 
-SwarmBuddy 是面向海域搜索与巡检的智能辅助平台。当前原型支持导入 GeoJSON 海域数据、生成并优化避障扫描航线、查看地图结果，以及通过对话分析方案。海空协同等功能仍在开发和仿真验证中。
+SwarmBuddy 是面向海域搜索与巡检的智能辅助平台。当前原型支持导入 GeoJSON 海域数据、生成多艇分区扫描航线、查看地图结果，以及通过对话分析方案。海空协同等功能仍在开发和仿真验证中。
 
 ## 项目结构
 
@@ -12,6 +12,20 @@ SwarmBuddy 是面向海域搜索与巡检的智能辅助平台。当前原型支
 | `route_planning/` | 海域环境处理和扫描航线规划算法 |
 | `src/agentscope/` | 项目使用的 AgentScope 2.0 本地源码 |
 | `Start-SwarmBuddy.ps1` | 原开发机启动脚本，含本机 Memurai 安装路径；新电脑建议先按下述步骤手动启动 |
+
+## 任务页代码位置
+
+| 文件 | 职责 |
+| --- | --- |
+| `SwarmBuddy/web_ui/frontend/src/pages/mission/MissionPage.tsx` | 会话、任务状态和地图交互的页面编排 |
+| `missionChatBridge.ts`、`missionChatActions.ts` | 地图对象定位、仿真快照和规划操作的结构化回执 |
+| `missionFleet.ts`、`missionCooperationSimulation.ts` | 前端艇机仿真状态及推进 |
+| `MissionScanMap.tsx`、`MissionSituationAside.tsx` | 地图与右侧任务状态视图 |
+| `SwarmBuddy/agent_service/main.py` | 聊天工具和扫描任务 API |
+| `mission_chat_state.py`、`mission_task_agents.py` | 会话仿真快照与任务事件处理 |
+| `route_planning/` | 分区与航线计算，独立于聊天回复 |
+
+表中只写文件名的条目与上一条完整路径位于同一目录。任务页聊天的自然语言回复由模型生成；规划、定位和状态校验由确定性代码执行，并将结果作为结构化数据传给模型。
 
 ## 在本地运行
 

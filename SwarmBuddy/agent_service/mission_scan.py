@@ -5,10 +5,11 @@ import math
 from pathlib import Path
 
 from shapely import transform
-from shapely.geometry import LineString, Point, box, mapping, shape
-from shapely.ops import unary_union
-from route_planning.tools.planning.generate_scan_path import generate_scan_path
-from route_planning.tools.planning.validate_path import validate_path
+from shapely.geometry import Point, box, mapping, shape
+from shapely.ops import polygonize, unary_union
+# Legacy implementation is retained below, but the DARP port is active.
+# from route_planning.tools.planning.generate_scan_path import generate_scan_path
+from route_planning.tools.allocation.darp_coverage import plan_darp_coverage
 
 DATA_FILE = Path(__file__).resolve().parents[2] / "route_planning" / "data" / "export.geojson"
 EARTH_RADIUS_M = 6_371_000
@@ -18,6 +19,51 @@ EARTH_RADIUS_M = 6_371_000
 def _demo_features():
     with DATA_FILE.open(encoding="utf-8") as stream:
         return json.load(stream)["features"]
+
+
+def _coastline_land(features, search_region):
+    """Turn directed OSM coastlines into land polygons inside a scan window.
+
+    Coastline direction places land to the left. The scan-window boundary closes
+    open coastal arcs, while closed island polygons remain separate obstacles.
+    """
+    coastlines = []
+    for feature in features:
+        geometry = feature.get("geometry") or {}
+        properties = feature.get("properties") or {}
+        if (geometry.get("type") != "LineString"
+                or (properties.get("natural") != "coastline"
+                    and properties.get("role") != "coastline")):
+            continue
+        line = shape(geometry)
+        if line.intersects(search_region):
+            clipped = line.intersection(search_region)
+            coastlines.extend(part for part in (
+                [clipped] if clipped.geom_type == "LineString" else getattr(clipped, "geoms", []))
+                if part.geom_type == "LineString" and part.length > 0)
+    if not coastlines:
+        return []
+
+    faces = list(polygonize(unary_union([search_region.boundary, *coastlines])))
+    if not faces:
+        raise ValueError("示例海岸线无法构成陆地边界，请导入包含陆地多边形的 GeoJSON")
+    epsilon = min(search_region.bounds[2] - search_region.bounds[0],
+                  search_region.bounds[3] - search_region.bounds[1]) * 0.00002
+    land_faces = set()
+    for line in coastlines:
+        coordinates = list(line.coords)
+        for (x1, y1), (x2, y2) in zip(coordinates, coordinates[1:]):
+            dx, dy = x2 - x1, y2 - y1
+            distance = math.hypot(dx, dy)
+            if distance <= 1e-12:
+                continue
+            left = Point((x1 + x2) / 2 - dy / distance * epsilon,
+                         (y1 + y2) / 2 + dx / distance * epsilon)
+            for index, face in enumerate(faces):
+                if face.covers(left):
+                    land_faces.add(index)
+                    break
+    return [face for index, face in enumerate(faces) if index in land_faces]
 
 
 def _polygon(value, label):
@@ -126,8 +172,10 @@ def plan_scan(west=119.68, south=25.53, east=119.72, north=25.57,
               spacing_m=350, obstacle_buffer_m=40, environment_data=None,
               speed_knots=None, start_point=None, end_point=None,
               use_requested_bounds=False, allow_bounds_only=False,
-              optimize_route=False, previous_result=None):
+              optimize_route=False, previous_result=None, vessel_count=3):
     """优先使用用户提供的几何数据；未提供时才使用示例地图。"""
+    if optimize_route:
+        raise ValueError("DARP 多艇方案的二次航线优化尚未移植")
     if not all(math.isfinite(x) for x in (west, south, east, north, spacing_m, obstacle_buffer_m)):
         raise ValueError("所有数值必须是有限数字")
     if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
@@ -159,14 +207,19 @@ def plan_scan(west=119.68, south=25.53, east=119.72, north=25.57,
         return ((x - center_lon) * metres_lon, (y - center_lat) * metres_lat)
 
     region = transform(geo_region, project, interleaved=False)
+    geo_coastline_land = []
     if environment_data is None and not allow_bounds_only:
         geo_obstacles = []
-        for feature in _demo_features():
+        demo_features = _demo_features()
+        for feature in demo_features:
             raw = feature.get("geometry")
             if isinstance(raw, dict) and raw.get("type") in ("Polygon", "MultiPolygon"):
                 geometry = shape(raw)
                 if geometry.intersects(geo_region):
                     geo_obstacles.append(geometry)
+        geo_coastline_land = _coastline_land(demo_features, geo_region)
+    elif environment_data is not None and environment_data.get("type") == "FeatureCollection":
+        geo_coastline_land = _coastline_land(environment_data.get("features", []), geo_region)
 
     def clipped(items):
         result = []
@@ -180,7 +233,8 @@ def plan_scan(west=119.68, south=25.53, east=119.72, north=25.57,
         return result
 
     obstacles, zones = clipped(geo_obstacles), clipped(geo_zones)
-    exclusions = obstacles + zones
+    coastline_land = clipped(geo_coastline_land)
+    exclusions = obstacles + zones + coastline_land
     def checked_point(coordinates, label):
         if coordinates is None:
             return None
@@ -203,36 +257,46 @@ def plan_scan(west=119.68, south=25.53, east=119.72, north=25.57,
     # 连接路径与扫描线裁剪使用相同的避障距离；微小容差避免缓冲区边界误判为碰撞。
     checked_buffer = max(0, obstacle_buffer_m - 0.1)
     environment = {"search_region": mapping(region),
-                   "obstacles": [mapping(x.buffer(checked_buffer)) for x in obstacles],
+                   "obstacles": [mapping(x.buffer(checked_buffer)) for x in obstacles + coastline_land],
                    "no_go_zones": [mapping(x.buffer(checked_buffer)) for x in zones],
                    "start_points": []}
-    baseline_waypoints = None
-    if optimize_route and previous_result is not None:
-        coordinates = previous_result.get("route_geojson", {}).get("coordinates", [])
-        if len(coordinates) >= 2:
-            baseline_waypoints = [list(project(lon, lat)) for lon, lat in coordinates]
-    raw = generate_scan_path(
-        search_region=environment["search_region"], spacing=spacing_m,
-        obstacles=[mapping(x) for x in exclusions],
-        obstacle_buffer=obstacle_buffer_m, environment=environment,
-        start_point=projected_start, end_point=projected_end,
-        optimize_route=optimize_route, baseline_waypoints=baseline_waypoints)
-    scan_segment_length = sum(LineString(segment).length for segment in raw["segments"])
-    if raw["used_previous_route"] and previous_result is not None:
-        # 已保存结果在生成时通过安全校验；经纬度序列化的微小误差不应触发全量重算。
-        return {
-            **previous_result,
-            "route_optimized": True,
-            "baseline_path_length_m": previous_result.get("baseline_path_length_m")
-            or previous_result["path_length_m"],
-            "scan_segment_length_m": round(scan_segment_length, 1),
-        }
-    if not validate_path(raw["waypoints"], environment)["valid"]:
-        raise ValueError("生成的航迹未通过安全校验")
+    # Original scan-planner invocation is retained for later comparison.
+    # baseline_waypoints = None
+    # if optimize_route and previous_result is not None:
+    #     coordinates = previous_result.get("route_geojson", {}).get("coordinates", [])
+    #     if len(coordinates) >= 2:
+    #         baseline_waypoints = [list(project(lon, lat)) for lon, lat in coordinates]
+    # raw = generate_scan_path(
+    #     search_region=environment["search_region"], spacing=spacing_m,
+    #     obstacles=[mapping(x) for x in exclusions],
+    #     obstacle_buffer=obstacle_buffer_m, environment=environment,
+    #     start_point=projected_start, end_point=projected_end,
+    #     optimize_route=optimize_route, baseline_waypoints=baseline_waypoints)
+    # scan_segment_length = sum(LineString(segment).length for segment in raw["segments"])
+    # if raw["used_previous_route"] and previous_result is not None:
+    #     # 已保存结果在生成时通过安全校验；经纬度序列化的微小误差不应触发全量重算。
+    #     return {
+    #         **previous_result,
+    #         "route_optimized": True,
+    #         "baseline_path_length_m": previous_result.get("baseline_path_length_m")
+    #         or previous_result["path_length_m"],
+    #         "scan_segment_length_m": round(scan_segment_length, 1),
+    #     }
+    # if not validate_path(raw["waypoints"], environment)["valid"]:
+    #     raise ValueError("生成的航迹未通过安全校验")
 
-    buffered = unary_union([x.buffer(obstacle_buffer_m) for x in exclusions]) if exclusions else None
+    del previous_result
+    blocked = [item.buffer(obstacle_buffer_m) for item in exclusions]
+    darp = plan_darp_coverage(
+        search_region=region, exclusions=blocked, spacing=spacing_m,
+        environment=environment, vessel_count=vessel_count,
+        start_point=projected_start, end_point=projected_end,
+    )
+    scan_segment_length = sum(line.length for line in darp.scan_lines)
+
+    buffered = unary_union(blocked) if blocked else None
     navigable = region.difference(buffered) if buffered is not None else region
-    scan_lines = [LineString(segment) for segment in raw["segments"]]
+    scan_lines = darp.scan_lines
     covered = navigable.intersection(
         unary_union([line.buffer(spacing_m / 2, cap_style="flat") for line in scan_lines]))
     min_x, min_y, max_x, max_y = region.bounds
@@ -265,31 +329,49 @@ def plan_scan(west=119.68, south=25.53, east=119.72, north=25.57,
                 context_obstacles = context_obstacles[:250]
                 break
 
+    routes = [
+        {
+            "vessel_id": item["vessel_id"],
+            "route_geojson": {"type": "LineString", "coordinates": [to_geo(*p) for p in item["waypoints"]]},
+            "path_length_m": round(item["length_m"], 1),
+            "region_area_m2": round(item["region_area_m2"]),
+            "waypoint_count": len(item["waypoints"]),
+        }
+        for item in darp.routes
+    ]
+    total_length = sum(item["length_m"] for item in darp.routes)
+    longest_route = max(item["length_m"] for item in darp.routes)
     return {
         "bounds": {"west": west, "south": south, "east": east, "north": north},
         "source": "provided" if environment_data is not None else "bounds_only" if allow_bounds_only else "demo",
+        "planner": "darp_python",
+        "planner_revision": 2,
+        "vessel_count": vessel_count,
+        "grid_size_m": round(darp.grid_size_m, 1),
         "spacing_m": spacing_m, "obstacle_buffer_m": obstacle_buffer_m,
         "speed_knots": speed_knots,
         "start_point": list(start_point) if start_point is not None else None,
         "end_point": list(end_point) if end_point is not None else None,
-        "estimated_duration_hours": round(raw["length"] / (speed_knots * 1852), 4) if speed_knots is not None else None,
-        "path_length_m": round(raw["length"], 1),
+        "estimated_duration_hours": round(longest_route / (speed_knots * 1852), 4) if speed_knots is not None else None,
+        "path_length_m": round(total_length, 1),
         "scan_segment_length_m": round(scan_segment_length, 1),
-        "baseline_path_length_m": (
-            previous_result.get("baseline_path_length_m") or previous_result["path_length_m"]
-            if previous_result is not None else round(raw["baseline_length"], 1)
-            if raw["baseline_length"] is not None else None
-        ),
-        "route_optimized": optimize_route,
-        "waypoint_count": len(raw["waypoints"]),
-        "obstacle_count": len(obstacles), "no_go_zone_count": len(zones),
+        "baseline_path_length_m": None,
+        "route_optimized": False,
+        "waypoint_count": sum(len(item["waypoints"]) for item in darp.routes),
+        "obstacle_count": len(obstacles) + len(coastline_land), "no_go_zone_count": len(zones),
         "planned_coverage_percent": round(100 * covered.area / navigable.area, 1) if navigable.area else 0,
         "covered_area_m2": round(covered.area), "target_area_m2": round(navigable.area),
-        "route_type": "往复式扫描", "validated": True,
-        "route_geojson": {"type": "LineString", "coordinates": [to_geo(*p) for p in raw["waypoints"]]},
+        "route_type": "DARP 多艇分区扫描", "validated": True,
+        "route_geojson": routes[0]["route_geojson"],
+        "routes": routes,
         "map": {"region": _rings(region, to_map),
                 "obstacles": [ring for x in obstacles for ring in _rings(x, to_map)],
+                "coastline_land": [ring for x in coastline_land for ring in _rings(x, to_map)],
                 "context_obstacles": context_obstacles,
                 "no_go_zones": [ring for x in zones for ring in _rings(x, to_map)],
-                "waypoints": [to_map(*p) for p in raw["waypoints"]]},
+                "waypoints": [to_map(*p) for p in darp.routes[0]["waypoints"]],
+                "routes": [{"vessel_id": item["vessel_id"],
+                            "waypoints": [to_map(*p) for p in item["waypoints"]],
+                            "region": _rings(part, to_map)}
+                           for item, part in zip(darp.routes, darp.regions)]},
     }

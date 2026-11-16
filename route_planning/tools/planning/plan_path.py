@@ -209,7 +209,7 @@ def _grid_detour(start, goal, environment):
     blocked = [shape(item) for item in environment["obstacles"] + environment["no_go_zones"]]
     direct = LineString([start, goal])
     blockers = [item for item in blocked if item.intersects(direct)]
-    if not blockers:
+    if not blockers and region.covers(direct):
         return None
     blocked_union = unary_union(blocked)
     free = prep(region.difference(blocked_union))
