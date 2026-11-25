@@ -81,7 +81,7 @@ export function MissionGamePanel({ result = null }: { result?: ScanResult | null
 	const red = gameScore(game, 'red');
 	const blue = gameScore(game, 'blue');
 	const restart = () => { setPlaying(false); setGame(createGame(config)); };
-	return <div className="mission-game-panel" role="tabpanel" aria-label="智能博弈">
+	return <div className="mission-game-panel">
 		<div className="mission-game-heading"><div><strong>海域搜寻博弈</strong><p>红蓝两队分别协作搜索；目标真值在核查前对双方隐藏。当前使用可复现的规则策略智能体。</p></div><span>第 {game.turn} / {game.maxTurns} 轮</span></div>
 		<div className="mission-game-controls">
 			<label>红队艇数<input aria-label="红队艇数" type="number" min="1" max="8" value={config.redCount} onChange={(event) => setConfig((current) => ({ ...current, redCount: Number(event.target.value) }))} /></label>

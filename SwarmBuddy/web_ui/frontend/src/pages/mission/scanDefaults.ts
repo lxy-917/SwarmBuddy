@@ -1,6 +1,8 @@
 import { EXAMPLE_SCAN_SPEED_KNOTS } from './scanSpeed';
 import type { ScanRequest } from '@/api/missionScan';
 
+export const SCAN_ROUTE_COLORS = ['#71ceef', '#75ddbd', '#efc87d', '#c2a3e8', '#f29ba9', '#83adef', '#d6df81', '#e9acdd'];
+
 export const DEFAULT_SCAN: ScanRequest = {
 	west: 119.68,
 	south: 25.53,

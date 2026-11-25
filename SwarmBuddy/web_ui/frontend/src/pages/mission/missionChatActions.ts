@@ -10,6 +10,8 @@ export function scanPlanReport(result: ScanResult, derivedBounds = false, radius
 		start_point_wgs84: result.start_point, end_point_wgs84: result.end_point,
 		vessel_count: result.routes?.length ?? result.vessel_count,
 		path_length_m: result.path_length_m,
+		waypoint_count: result.waypoint_count,
+		obstacle_count: result.obstacle_count,
 		planned_coverage_percent: result.planned_coverage_percent,
 		estimated_duration_hours: result.estimated_duration_hours,
 		route_optimized: result.route_optimized,

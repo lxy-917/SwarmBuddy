@@ -3,10 +3,13 @@ import type { Msg, TextBlock } from '@agentscope-ai/agentscope/message';
 import type { ContentBlock } from '@agentscope-ai/agentscope/message';
 import katexStyles from 'katex/dist/katex.min.css?inline';
 import {
+	Activity,
 	ArrowDown,
+	BarChart3,
 	Check,
 	ChevronRight,
 	Compass,
+	Crosshair,
 	LoaderCircle,
 	Expand,
 	Grid3X3,
@@ -42,12 +45,15 @@ import './missionTableDialog.css';
 import { scanMatchesCoordinates, scanPlanReport } from './missionChatActions';
 import { buildMissionChatSnapshot, locateMissionObject, parseLocateRequest } from './missionChatBridge';
 import { MissionComposer } from './MissionComposer';
+import { MissionAnalysisPanel, MissionExecutionPanel, MissionTargetsPanel } from './MissionDashboardPanels';
 import { MissionGamePanel } from './MissionGamePanel';
 import { advanceSimulation, pauseSimulation, simulatedCoverage, simulationAssets, simulationInitial, startSimulation } from './missionCooperationSimulation';
 import { commandFleetUav, releaseFleetUav, reportFleetObservation, respondFleetObservation } from './missionFleet';
 import type { FleetUavCommand, FleetPoint } from './missionFleet';
 import { MissionMessageActions } from './MissionMessageActions';
 import { MissionMessageContent } from './MissionMessageContent';
+import { missionActionContext } from './missionReplyActivity';
+import { MissionReplyFrame, MissionReplyOverview } from './MissionReplyOverview';
 import { advanceMultiGrid, multiGridInitial, multiGridSummary } from './missionMultiGrid';
 import { UavIcon, UsvIcon } from './MissionPlatformIcons';
 import { MissionScanMap } from './MissionScanMap';
@@ -77,10 +83,19 @@ import { COLLABORATION_AGENT_NAME } from '@/pages/collaboration/collaborationDra
 import { readChatCredentialPreference } from '@/pages/credential/credentialPreference';
 import { isKnowledgeChatAgent } from '@/pages/knowledge/knowledgeChat';
 
-const FRAME_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body,#mission-root{min-height:100%;background:#061522}</style><style>${katexStyles}</style><link rel="stylesheet" href="/ocean/app/styles.css"><link rel="stylesheet" href="/ocean/app/integration.css?v=situation-board-30"></head><body><div id="mission-root"></div></body></html>`;
+const FRAME_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body,#mission-root{min-height:100%;background:#061522}</style><style>${katexStyles}</style><link rel="stylesheet" href="/ocean/app/styles.css"><link rel="stylesheet" href="/ocean/app/integration.css?v=situation-board-30"><link rel="stylesheet" href="/ocean/app/dashboard.css"><link rel="stylesheet" href="/ocean/app/mission-replies.css"></head><body><div id="mission-root"></div></body></html>`;
 const QUICK_CHAT_NAME = 'SwarmBuddy 快速问答';
 const QUICK_CHAT_PROMPT = '你是 SwarmBuddy 的通用问答助手。';
 const DEMO_BOAT_ROUTE = 'M538 53H299Q275 53 275 67Q275 81 299 81H655Q679 81 679 95Q679 109 655 109H311Q287 109 287 123Q287 137 311 137H688Q712 137 712 151Q712 165 688 165H581';
+
+const SITUATION_TABS = [
+	{ id: 'overview', label: '海域态势', title: '海域扫描任务', icon: Compass },
+	{ id: 'execution', label: '任务执行', title: '任务执行', icon: Activity },
+	{ id: 'analysis', label: '数据分析', title: '数据分析', icon: BarChart3 },
+	{ id: 'targets', label: '目标识别', title: '目标识别', icon: Crosshair },
+	{ id: 'game', label: '智能博弈', title: '智能博弈', icon: Radar },
+] as const;
+type SituationTab = (typeof SITUATION_TABS)[number]['id'];
 
 type SidebarItem = { kind: 'agent' | 'session'; id: string; agentId: string; name: string };
 type SidebarContextMenu = { item: SidebarItem; x: number; y: number };
@@ -210,7 +225,8 @@ function MissionContent() {
 	const [mapMode, setMapMode] = useState<'route' | 'terrain'>('route');
 	const [progressCollapsed, setProgressCollapsed] = useState(false);
 	const [legendCollapsed, setLegendCollapsed] = useState(false);
-	const [situationTab, setSituationTab] = useState<'overview' | 'execution' | 'targets' | 'analysis' | 'game'>('overview');
+	const [situationTab, setSituationTab] = useState<SituationTab>('overview');
+	const { icon: SituationIcon, title: situationTitle } = SITUATION_TABS.find((tab) => tab.id === situationTab) ?? SITUATION_TABS[0];
 	const [scanResult, setScanResult] = useState<ScanResult | null>(null);
 	const [cooperation, setCooperation] = useState(simulationInitial);
 	const [missionAssignment, setMissionAssignment] = useState<MissionTaskAssignment | null>(null);
@@ -250,6 +266,22 @@ function MissionContent() {
 		window.addEventListener('message', onCredentialUpdate);
 		return () => window.removeEventListener('message', onCredentialUpdate);
 	}, [refetchSessions]);
+	const handleSituationTabKeys = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+		const last = SITUATION_TABS.length - 1;
+		const keyIndices: Partial<Record<string, number>> = {
+			ArrowLeft: index === 0 ? last : index - 1,
+			ArrowRight: index === last ? 0 : index + 1,
+			Home: 0,
+			End: last,
+		};
+		const next = keyIndices[event.key];
+		if (next === undefined) return;
+		event.preventDefault();
+		const tab = SITUATION_TABS[next].id;
+		setSituationTab(tab);
+		event.currentTarget.ownerDocument.getElementById('mission-tab-' + tab)?.focus();
+	};
+
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(
 		() => localStorage.getItem('swarmbuddy.historySidebarCollapsed') === 'true',
 	);
@@ -424,7 +456,23 @@ function MissionContent() {
 	}, [cooperation.second, multiGrid.lastSecond]);
 	const multiGridStats = multiGridSummary(multiGrid);
 	const focusTrainingTarget = useCallback(() => { if (currentTaskId) setSelectedMapObject({ kind: 'target', id: 'latest', mission_id: currentTaskId }); setObservationFocusPoint(null); setTargetSelected(true); setTargetFocusToken((value) => value + 1); }, [currentTaskId]);
-	const focusObservation = useCallback((point: [number, number]) => { if (currentTaskId) setSelectedMapObject({ kind: 'target', id: 'latest', mission_id: currentTaskId }); setObservationFocusPoint(point); setTargetSelected(true); setTargetFocusToken((value) => value + 1); }, [currentTaskId]);
+	const focusObservation = useCallback((point: FleetPoint, id = 'latest') => {
+		if (currentTaskId) setSelectedMapObject({ kind: 'target', id, mission_id: currentTaskId });
+		setObservationFocusPoint(point);
+		setTargetSelected(true);
+		setTargetFocusToken((value) => value + 1);
+	}, [currentTaskId]);
+	const openSituationOverview = (expand = false) => {
+		setSituationTab('overview');
+		if (expand) setExpanded(true);
+		frameDocument?.getElementById('mission-tab-overview')?.focus();
+	};
+	const locateDashboardTarget = (id: string, point: FleetPoint) => {
+		setMapMode('route');
+		openSituationOverview();
+		if (id === 'latest') focusTrainingTarget();
+		else focusObservation(point, id);
+	};
 	useEffect(() => {
 		if (!cooperation.running || !scanResult || phase !== 'idle') return;
 		let frame = 0;
@@ -686,13 +734,21 @@ function MissionContent() {
 			setStartingScanAnalysis(false);
 		}
 	};
+	const onOpenReplyAnalysis = useCallback(() => {
+		setResultHidden(false);
+		setExpanded(false);
+		setSituationTab('analysis');
+		frameDocument?.defaultView?.requestAnimationFrame(() => {
+			frameDocument.getElementById('mission-tab-analysis')?.focus();
+		});
+	}, [frameDocument]);
 	const currentModel = activeSession?.session.config.chat_model_config?.model;
 	const sendActionReport = useCallback(async (input: string, report: unknown, selection?: MissionMapSelection | null) => {
 		const now = new Date().toISOString();
 		await sendWithCurrentScan([
 			{ id: crypto.randomUUID(), type: 'text', text: input, created_at: now },
 			{ id: crypto.randomUUID(), type: 'text', created_at: now,
-				text: `[SwarmBuddyMissionContext JSON]\n${JSON.stringify({ action_result: report })}\n这是页面刚完成的操作回执。请结合当前任务数据自行回答用户，不要重复执行该操作，也不要逐字照抄回执。` },
+				text: missionActionContext(report) },
 		], selection);
 	}, [sendWithCurrentScan]);
 	const sendWithScanCoordinates = useCallback(async (blocks: ContentBlock[]) => {
@@ -1250,7 +1306,8 @@ function MissionContent() {
 								? message.error?.message ?? '模型调用失败，请重试。'
 								: null;
 							const hasVisibleReply = message.content.some((block) => block.type === 'text' || block.type === 'thinking' || block.type === 'data');
-							const pendingEmptyReply = !hasVisibleReply && !replyError && !message.finished_at && message.content.length === 0;
+							const replyIsActive = isRunning && message.id === lastAssistant?.id;
+							const pendingEmptyReply = replyIsActive && !replyError && !message.finished_at && message.content.length === 0;
 							const renderedMessage = message.role === 'user' ? (
 								<div className="user-message">
 									<MissionMessageContent content={message.content.filter((block) => !isScanContextBlock(block))} fallback="已发送附件" attachmentsFirst />
@@ -1259,29 +1316,30 @@ function MissionContent() {
 										{clock && <time className="mission-message-clock" dateTime={message.created_at} title={fullTime}>{clock}</time>}
 									</div>}
 								</div>
-							) : pendingEmptyReply ? <MissionThinkingIndicator stopping={phase === 'interrupting'} startedAt={message.created_at} /> : (
-								<div className="assistant-row mission-message">
-									<RobotAvatar small />
-									<div className="mission-reply-content">
-										<div className="assistant-bubble">
-											{replyDuration && !hasThinking && <div className="mission-response-duration" title={`回复耗时 ${replyDuration}`}>用时 {replyDuration}</div>}
-											{(hasVisibleReply || (message.finished_at && !replyError)) && <div className="understanding"><MissionMessageContent content={message.content} fallback="本次没有生成文字回复，请重试。" streaming={!message.finished_at} pace={liveReplyIds.has(message.id)} replyFinishedAt={message.finished_at} revealKeyPrefix={`${sessionId}:${message.id}`} /></div>}
-											{replyError && <div className="mission-reply-error" role="alert"><strong>回复失败</strong><span>{replyError}</span></div>}
-											<MissionToolCalls content={message.content} replyId={message.id} onUserConfirm={onUserConfirm} />
-										</div>
-										{!messageSelection && <div className="mission-assistant-footer">
-											{message.finished_at && <MissionMessageActions
-												messageId={message.id}
-												text={text}
-												canRegenerate={Boolean(previousUser && canSend)}
-												onRegenerate={() => previousUser ? send(previousUser.content) : Promise.resolve()}
-											/>}
-											<div className="mission-message-timing">
-												{clock && <time className="mission-message-clock" dateTime={message.created_at} title={fullTime}>{clock}</time>}
-											</div>
-										</div>}
-									</div>
-								</div>
+							) : (
+								<MissionReplyFrame
+									startedAt={message.created_at}
+									duration={hasThinking ? null : replyDuration}
+									actions={!messageSelection && message.finished_at && <MissionMessageActions
+										messageId={message.id}
+										text={text}
+										canRegenerate={Boolean(previousUser && canSend)}
+										onRegenerate={() => previousUser ? send(previousUser.content) : Promise.resolve()}
+									/>}
+								>
+									<MissionReplyOverview
+										content={message.content}
+										userContent={previousUser?.content}
+										finished={!replyIsActive}
+										onOpenAnalysis={scanResult ? onOpenReplyAnalysis : undefined}
+									/>
+									{pendingEmptyReply && <MissionThinkingIndicator stopping={phase === 'interrupting'} startedAt={message.created_at} />}
+									{(hasVisibleReply || (message.finished_at && !replyError)) && <div className="understanding">
+										<MissionMessageContent content={message.content} fallback="本次没有生成文字回复，请重试。" streaming={!message.finished_at} pace={liveReplyIds.has(message.id)} replyFinishedAt={message.finished_at} revealKeyPrefix={sessionId + ':' + message.id} />
+									</div>}
+									{replyError && <div className="mission-reply-error" role="alert"><strong>回复失败</strong><span>{replyError}</span></div>}
+									<MissionToolCalls content={message.content} replyId={message.id} onUserConfirm={onUserConfirm} />
+								</MissionReplyFrame>
 							);
 							return <Fragment key={message.id}>
 								{showTimeDivider && <div className="mission-time-divider"><time dateTime={message.created_at} title={fullTime}>{formatMissionDividerTime(message.created_at)}</time></div>}
@@ -1293,7 +1351,9 @@ function MissionContent() {
 								) : renderedMessage}
 							</Fragment>;
 						})}
-						{activeSession && isRunning && !lastAssistant && <MissionThinkingIndicator stopping={phase === 'interrupting'} startedAt={msgs[lastUserIndex]?.created_at} />}
+						{activeSession && isRunning && !lastAssistant && <MissionReplyFrame startedAt={msgs[lastUserIndex]?.created_at}>
+							<MissionThinkingIndicator stopping={phase === 'interrupting'} startedAt={msgs[lastUserIndex]?.created_at} />
+						</MissionReplyFrame>}
 					</div>
 					{showLatestButton && <button className="mission-jump-latest" type="button" onClick={scrollToLatest}><ArrowDown size={15} /> 回到最新消息</button>}
 					{messageSelection && <div className="mission-selection-bar">
@@ -1334,17 +1394,38 @@ function MissionContent() {
 							resizeChatPanel((chatPanelRef.current?.getBoundingClientRect().width ?? 500) + (event.key === 'ArrowRight' ? 24 : -24));
 						}
 					}}><span aria-hidden="true" /></button>}
-					<div className="mission-situation-topbar"><div className="mission-situation-tabs" role="tablist" aria-label="态势看板栏目"><button type="button" role="tab" aria-selected={situationTab === 'overview'} className={situationTab === 'overview' ? 'active' : ''} onClick={() => setSituationTab('overview')}>海域态势</button><button type="button" role="tab" aria-selected={situationTab === 'execution'} className={situationTab === 'execution' ? 'active' : ''} onClick={() => setSituationTab('execution')}>任务执行</button><button type="button" role="tab" aria-selected={situationTab === 'analysis'} className={situationTab === 'analysis' ? 'active' : ''} onClick={() => setSituationTab('analysis')}>数据分析</button><button type="button" role="tab" aria-selected={situationTab === 'targets'} className={situationTab === 'targets' ? 'active' : ''} onClick={() => setSituationTab('targets')}>目标识别</button><button type="button" role="tab" aria-selected={situationTab === 'game'} className={situationTab === 'game' ? 'active' : ''} onClick={() => setSituationTab('game')}>智能博弈</button></div><div className="mission-situation-environment" aria-label="海域天气" title={marineObservations?.station ? `NOAA NDBC 浮标 ${marineObservations.station.id}｜距航迹 ${marineObservations.station.distance_km} km｜观测时间 ${marineObservations.observed_at}` : marineObservations?.sample ? `${marineObservations.sample_kind === 'demo' ? '示例航迹坐标｜' : ''}预海天气｜坐标 [${marineObservations.sample.longitude}, ${marineObservations.sample.latitude}]｜天气实况 ${marineObservations.observed_at ?? '时间未知'}` : marineObservations?.message ?? '根据当前航迹查询海域天气'}><div className="mission-situation-environment-time"><MissionSituationClock /><span>{observationState === 'ready' ? marineObservations?.source === '预海天气' ? '天气实况' : '浮标实测' : observationState === 'loading' ? '查询海况中' : observationState === 'unavailable' ? '暂无海况' : observationState === 'error' ? '海况服务异常' : '待查询海况'}</span></div><div className="mission-situation-environment-values"><span>温度：{marineObservations?.temperature_c == null ? '—' : `${marineObservations.temperature_c.toFixed(1)} ℃`}</span><span>能见度：{marineObservations?.visibility_km == null ? '—' : `${marineObservations.visibility_km.toFixed(1)} km`}</span><span>风速：{marineObservations?.wind_speed_ms == null ? '—' : `${marineObservations.wind_speed_ms.toFixed(1)} m/s`}</span></div></div></div>
+					<div className="mission-situation-topbar">
+						<div className="mission-situation-tabs" role="tablist" aria-label="态势看板栏目">
+							{SITUATION_TABS.map(({ id, label }, index) => (
+								<button
+									key={id}
+									id={'mission-tab-' + id}
+									type="button"
+									role="tab"
+									aria-label={label}
+									aria-controls="mission-situation-tabpanel"
+									aria-selected={situationTab === id}
+									tabIndex={situationTab === id ? 0 : -1}
+									className={situationTab === id ? 'active' : ''}
+									onClick={() => setSituationTab(id)}
+									onKeyDown={(event) => handleSituationTabKeys(event, index)}
+								>{label}</button>
+							))}
+						</div>
+						<div className="mission-situation-environment" aria-label="海域天气" title={marineObservations?.station ? `NOAA NDBC 浮标 ${marineObservations.station.id}｜距航迹 ${marineObservations.station.distance_km} km｜观测时间 ${marineObservations.observed_at}` : marineObservations?.sample ? `${marineObservations.sample_kind === 'demo' ? '示例航迹坐标｜' : ''}预海天气｜坐标 [${marineObservations.sample.longitude}, ${marineObservations.sample.latitude}]｜天气实况 ${marineObservations.observed_at ?? '时间未知'}` : marineObservations?.message ?? '根据当前航迹查询海域天气'}><div className="mission-situation-environment-time"><MissionSituationClock /><span>{observationState === 'ready' ? marineObservations?.source === '预海天气' ? '天气实况' : '浮标实测' : observationState === 'loading' ? '查询海况中' : observationState === 'unavailable' ? '暂无海况' : observationState === 'error' ? '海况服务异常' : '待查询海况'}</span></div><div className="mission-situation-environment-values"><span>温度：{marineObservations?.temperature_c == null ? '—' : `${marineObservations.temperature_c.toFixed(1)} ℃`}</span><span>能见度：{marineObservations?.visibility_km == null ? '—' : `${marineObservations.visibility_km.toFixed(1)} km`}</span><span>风速：{marineObservations?.wind_speed_ms == null ? '—' : `${marineObservations.wind_speed_ms.toFixed(1)} m/s`}</span></div></div>
+					</div>
 					<header className="result-heading mission-situation-taskbar">
-						<div className="mission-situation-task-title"><span className="mission-situation-task-icon"><Compass size={16} aria-hidden="true" /></span><strong>海域扫描任务</strong></div>
+						<div className="mission-situation-task-title"><span className="mission-situation-task-icon"><SituationIcon size={16} aria-hidden="true" /></span><strong>{situationTitle}</strong></div>
 						<div className="map-controls">
 							{situationTab === 'overview' && <MissionScanPlanner agentId={agentId} sessionId={sessionId} result={scanResult} coordinatePrefill={coordinatePrefill} importedBounds={scanDataBounds} onSpeedChange={(speed) => { saveScanSpeed(agentId, sessionId, speed); setScanSpeedKnots(speed); }} onResult={(next) => { setScanResult(next); setMapMode('route'); if (next.source === 'demo') setScanDataName(null); }} />}
 							{situationTab === 'analysis' && <><button className="mission-scan-analyze" type="button" disabled={!canAnalyzeScan} title={!scanResult ? '请先生成航迹' : !hasModel ? '请先选择聊天模型' : isRunning ? '请等待当前回复完成' : '让当前模型分析右侧方案'} onClick={() => void analyzeScan()}><Sparkles size={15} aria-hidden="true" /><span>{startingScanAnalysis ? '正在发起…' : '分析当前方案'}</span></button><MissionScanDownloadSave result={scanResult} speedKnots={scanSpeedKnots} agentId={agentId} sessionId={sessionId} mapFrameRef={mapFrameRef} /></>}
-							<select className="mission-map-layer-select" aria-label="地图显示模式" value={mapMode} onChange={(event) => setMapMode(event.target.value as 'route' | 'terrain')}>
-								<option value="route">航迹视觉示意</option>
-								<option value="terrain">只看岛屿</option>
-							</select>
-							<button type="button" className={`mission-multigrid-button ${multiGridEnabled ? 'active' : ''}`} aria-label={multiGridEnabled ? '关闭 MultiGrid 网格试验' : '开启 MultiGrid 网格试验'} aria-pressed={multiGridEnabled} title="记录多艇经过网格的时间；这不是传感器探测覆盖率" disabled={!scanResult} onClick={() => { setMultiGrid(multiGridInitial(cooperation.second)); setMultiGridEnabled((value) => !value); }}><Grid3X3 size={14} /><span>网格试验</span></button>
+							{situationTab === 'overview' && <>
+								<select className="mission-map-layer-select" aria-label="地图显示模式" value={mapMode} onChange={(event) => setMapMode(event.target.value as 'route' | 'terrain')}>
+									<option value="route">航迹视觉示意</option>
+									<option value="terrain">只看岛屿</option>
+								</select>
+								<button type="button" className={`mission-multigrid-button ${multiGridEnabled ? 'active' : ''}`} aria-label={multiGridEnabled ? '关闭 MultiGrid 网格试验' : '开启 MultiGrid 网格试验'} aria-pressed={multiGridEnabled} title="记录多艇经过网格的时间；这不是传感器探测覆盖率" disabled={!scanResult} onClick={() => { setMultiGrid(multiGridInitial(cooperation.second)); setMultiGridEnabled((value) => !value); }}><Grid3X3 size={14} /><span>网格试验</span></button>
+							</>}
 							<button
 								className="icon-button"
 								type="button"
@@ -1357,16 +1438,45 @@ function MissionContent() {
 							<button
 								className="icon-button"
 								type="button"
-								aria-label={expanded ? '收起地图' : '展开地图'}
-								data-tooltip={expanded ? '收起地图' : '展开地图'}
+								aria-label={expanded ? '退出看板全屏' : '全屏显示看板'}
+								data-tooltip={expanded ? '退出看板全屏' : '全屏显示看板'}
 								onClick={() => setExpanded(!expanded)}
 							>
 								<Expand className="icon" />
 							</button>
 						</div>
 					</header>
-					{situationTab === 'game' ? <MissionGamePanel result={scanResult} /> : <>
-					<div className={`mission-situation-body ${expanded ? 'with-aside' : ''}`}>
+					<div
+						id="mission-situation-tabpanel"
+						className="mission-situation-tabpanel"
+						role="tabpanel"
+						aria-labelledby={'mission-tab-' + situationTab}
+						data-view={situationTab}
+						tabIndex={0}
+					>
+						{situationTab === 'execution' && <MissionExecutionPanel
+							result={scanResult}
+							cooperation={cooperation}
+							assignmentReady={Boolean(missionAssignment)}
+							error={taskEventError}
+							onToggle={toggleMissionSimulation}
+							onOpenOverview={() => openSituationOverview(Boolean(scanResult))}
+						/>}
+						{situationTab === 'analysis' && <MissionAnalysisPanel
+							result={scanResult}
+							speedKnots={scanSpeedKnots}
+							onOpenOverview={() => openSituationOverview()}
+						/>}
+						{situationTab === 'targets' && <MissionTargetsPanel
+							key={currentTaskId ?? sessionId}
+							result={scanResult}
+							cooperation={cooperation}
+							onLocate={locateDashboardTarget}
+						/>}
+						{situationTab === 'game' && <MissionGamePanel result={scanResult} />}
+						{(situationTab === 'overview' || (situationTab === 'analysis' && scanResult)) && <>
+							{situationTab === 'analysis' && <h3 className="mission-dashboard-map-title"><Route size={16} aria-hidden="true" />航迹预览</h3>}
+							<div className={expanded && situationTab === 'overview' ? 'mission-situation-body with-aside' : 'mission-situation-body'}>
 					<div ref={mapFrameRef} className={`map-frame ${mapMode === 'terrain' ? 'terrain-only' : ''}`}>
 						{scanResult ? <MissionScanMap result={scanResult} conditions={marineConditions} cooperation={cooperation} multiGrid={multiGridEnabled ? multiGrid : null} selectedUsvId={selectedUsvId} onSelectUsv={setSelectedUsvId} selectedMapObject={selectedMapObject?.mission_id === currentTaskId ? selectedMapObject : null} onSelectMapObject={(kind, id) => { if (currentTaskId) setSelectedMapObject({ kind, id, mission_id: currentTaskId }); }} targetSelected={targetSelected} onSelectTarget={focusTrainingTarget} targetFocusToken={targetFocusToken} focusPoint={observationFocusPoint} manualTargetUavId={manualTargetUavId} onManualTargetPoint={(target) => { const drone = cooperation.fleet?.drones.find((item) => item.id === manualTargetUavId); if (!drone || !missionAssignment) return; setTaskEventBusy(true); void postTaskEvent(drone.id, 'UAV_TARGET_REQUESTED', drone.position, { target_position: target }).then((event) => { if (event.status === 'completed') { setCooperation((current) => current.fleet ? { ...current, fleet: commandFleetUav(current.fleet, drone.id, 'manual', current.second, { target }) } : current); setManualTargetUavId(null); } }).catch(taskFailure).finally(() => setTaskEventBusy(false)); }} onCancelManualTarget={() => setManualTargetUavId(null)} onClearManualTarget={(id) => commandMissionUav(id, 'hover')} /> : <img
 							className="ocean-terrain"
@@ -1452,10 +1562,11 @@ function MissionContent() {
 						</div>
 						{scanResult && <details className="mission-satellite-credit"><summary>影像来源</summary><span>EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2024)</span></details>}
 					</div>
-						{expanded && <MissionSituationAside result={scanResult} cooperation={cooperation} onChange={setCooperation} selectedUsvId={selectedUsvId} onSelectUsv={setSelectedUsvId} onSelectAsset={(kind, id) => { if (currentTaskId) setSelectedMapObject({ kind, id, mission_id: currentTaskId }); }} targetSelected={targetSelected} onSelectTarget={focusTrainingTarget} onFocusObservation={focusObservation} manualTargetUavId={manualTargetUavId} onArmManualTarget={setManualTargetUavId} taskAssignment={missionAssignment} taskEvents={taskEvents} taskEventError={taskEventError} taskEventBusy={taskEventBusy} onReleaseUav={releaseMissionUav} onReportTarget={reportMissionTarget} onRespondObservation={respondMissionObservation} onCommandUav={commandMissionUav} onToggleSimulation={toggleMissionSimulation} />}
+						{expanded && situationTab === 'overview' && <MissionSituationAside result={scanResult} cooperation={cooperation} onChange={setCooperation} selectedUsvId={selectedUsvId} onSelectUsv={setSelectedUsvId} onSelectAsset={(kind, id) => { if (currentTaskId) setSelectedMapObject({ kind, id, mission_id: currentTaskId }); }} targetSelected={targetSelected} onSelectTarget={focusTrainingTarget} onFocusObservation={focusObservation} manualTargetUavId={manualTargetUavId} onArmManualTarget={setManualTargetUavId} taskAssignment={missionAssignment} taskEvents={taskEvents} taskEventError={taskEventError} taskEventBusy={taskEventBusy} onReleaseUav={releaseMissionUav} onReportTarget={reportMissionTarget} onRespondObservation={respondMissionObservation} onCommandUav={commandMissionUav} onToggleSimulation={toggleMissionSimulation} />}
 					</div>
-					<MissionScanSummary result={scanResult} speedKnots={scanSpeedKnots} portalDocument={frameDocument} cooperation={cooperation} />
-					</>}
+							{situationTab === 'overview' && <MissionScanSummary result={scanResult} speedKnots={scanSpeedKnots} portalDocument={frameDocument} cooperation={cooperation} />}
+						</>}
+					</div>
 				</section>
 			</div>
 			{contextMenu && frameDocument && createPortal(

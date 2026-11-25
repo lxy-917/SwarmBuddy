@@ -6,12 +6,12 @@ import type { CooperationSimulation } from './missionCooperationSimulation';
 import { MULTIGRID_CELL_SIZE } from './missionMultiGrid';
 import type { MultiGridState } from './missionMultiGrid';
 import { UavIcon, UsvIcon } from './MissionPlatformIcons';
+import { SCAN_ROUTE_COLORS } from './scanDefaults';
 import { loadSatelliteTile, visibleSatelliteTiles } from './satelliteTiles';
 import { getBaseUrl } from '@/api/client';
 import type { MarineConditions, ScanResult } from '@/api/missionScan';
 
 const points = (ring: number[][]) => ring.map(([x, y]) => `${x},${y}`).join(' ');
-const ROUTE_COLORS = ['#71ceef', '#75ddbd', '#efc87d', '#c2a3e8', '#f29ba9', '#83adef', '#d6df81', '#e9acdd'];
 // 扫描作业线通常重合，只标出优化后消失的旧连接段，方便辨认改动。
 function removedRouteEdges(before: number[][] | undefined, after: number[][]): number[][][] {
 	if (!before) return [];
@@ -336,9 +336,9 @@ export const MissionScanMap = memo(function MissionScanMap({ result, conditions,
 			</g>
 			{oldConnections.map((edge, index) => <polyline key={`old-route-${index}`} points={points(edge)} fill="none" stroke="#ffbd73" strokeWidth="2.4" strokeDasharray="5 4" strokeOpacity=".92" />)}
 			{plannedRoutes.map((route, index) => <g key={route.vessel_id} className="scan-routes">
-				{route.region.map((ring, regionIndex) => <polygon key={regionIndex} points={points(ring)} fill={ROUTE_COLORS[index % ROUTE_COLORS.length]} fillOpacity={selectedMapObject?.kind === 'region' && selectedMapObject.id === route.vessel_id ? '.23' : '.12'} stroke={ROUTE_COLORS[index % ROUTE_COLORS.length]} strokeWidth={selectedMapObject?.kind === 'region' && selectedMapObject.id === route.vessel_id ? '3' : '1.8'} strokeOpacity=".5" strokeDasharray="7 4" role="button" tabIndex={0} aria-label={`选择 ${route.vessel_id} 扫描分区`} onClick={() => onSelectMapObject?.('region', route.vessel_id)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectMapObject?.('region', route.vessel_id); }}><title>{route.vessel_id} 负责的扫描分区</title></polygon>)}
-				<polyline points={points(route.waypoints)} fill="none" stroke={ROUTE_COLORS[index % ROUTE_COLORS.length]} strokeWidth="1.4" strokeOpacity=".34" strokeDasharray="5 5" strokeLinejoin="round" strokeLinecap="round" />
-				{boatMarkers.find((boat) => boat.id === route.vessel_id && boat.progress > 0) && <polyline points={points(routePrefix(route.waypoints, boatMarkers.find((boat) => boat.id === route.vessel_id)!.progress))} fill="none" stroke={ROUTE_COLORS[index % ROUTE_COLORS.length]} strokeWidth="2.5" strokeOpacity=".88" strokeLinejoin="round" strokeLinecap="round"><title>{route.vessel_id} 已航行轨迹（仿真）</title></polyline>}
+				{route.region.map((ring, regionIndex) => <polygon key={regionIndex} points={points(ring)} fill={SCAN_ROUTE_COLORS[index % SCAN_ROUTE_COLORS.length]} fillOpacity={selectedMapObject?.kind === 'region' && selectedMapObject.id === route.vessel_id ? '.23' : '.12'} stroke={SCAN_ROUTE_COLORS[index % SCAN_ROUTE_COLORS.length]} strokeWidth={selectedMapObject?.kind === 'region' && selectedMapObject.id === route.vessel_id ? '3' : '1.8'} strokeOpacity=".5" strokeDasharray="7 4" role="button" tabIndex={0} aria-label={`选择 ${route.vessel_id} 扫描分区`} onClick={() => onSelectMapObject?.('region', route.vessel_id)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectMapObject?.('region', route.vessel_id); }}><title>{route.vessel_id} 负责的扫描分区</title></polygon>)}
+				<polyline points={points(route.waypoints)} fill="none" stroke={SCAN_ROUTE_COLORS[index % SCAN_ROUTE_COLORS.length]} strokeWidth="1.4" strokeOpacity=".34" strokeDasharray="5 5" strokeLinejoin="round" strokeLinecap="round" />
+				{boatMarkers.find((boat) => boat.id === route.vessel_id && boat.progress > 0) && <polyline points={points(routePrefix(route.waypoints, boatMarkers.find((boat) => boat.id === route.vessel_id)!.progress))} fill="none" stroke={SCAN_ROUTE_COLORS[index % SCAN_ROUTE_COLORS.length]} strokeWidth="2.5" strokeOpacity=".88" strokeLinejoin="round" strokeLinecap="round"><title>{route.vessel_id} 已航行轨迹（仿真）</title></polyline>}
 			</g>)}
 			{!result.map.routes?.length && simulationMarkers.length > 0 && <g className="scan-routes" fill="none" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" opacity=".34">
 				<polyline points={points(result.map.waypoints.slice(0, simulationSplit + 1))} stroke="#79dfff" />
@@ -364,6 +364,9 @@ export const MissionScanMap = memo(function MissionScanMap({ result, conditions,
 				<title>训练目标 · {cooperation.targetStatus === 'confirmed' ? '已复核' : '待复核'} · 仿真</title>
 			</g>}
 			{cooperation?.fleet?.observations.map((observation) => <g key={observation.id} className="mission-fleet-observation" transform={`translate(${observation.position[0]} ${observation.position[1]})`} role="button" tabIndex={0} aria-label={`选择训练目标 ${observation.id}`} onClick={() => onSelectMapObject?.('target', observation.id)} onKeyDown={(event) => { if (event.key === 'Enter') onSelectMapObject?.('target', observation.id); }}>
+				{selectedMapObject?.kind === 'target' && selectedMapObject.id === observation.id && (
+					<circle r="20" fill="none" stroke="#fff4a0" strokeWidth="2" strokeDasharray="4 3" />
+				)}
 				<circle r="12" fill="#ffb75d" fillOpacity=".16" stroke="#ffcc73" strokeWidth="1.4" />
 				<path d="M0 -7L7 0 0 7 -7 0Z" fill={observation.verifiedBy ? '#65dab7' : '#ff9c62'} stroke="#fff1cf" strokeWidth="1" />
 				<title>{observation.id} · {observation.sourceId} · {observation.verifiedBy ? `已由 ${observation.verifiedBy} 核查` : '待核查'}</title>
