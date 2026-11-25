@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 
 import { formatMissionElapsed, simulatedCoverage, simulationAssets } from './missionCooperationSimulation';
 import type { CooperationSimulation } from './missionCooperationSimulation';
+import { formatPlannedScanDuration } from './scanSpeed';
 import { drawSatelliteAttribution } from './satelliteAttribution';
 import { missionScanApi } from '@/api/missionScan';
 import type { ScanResult } from '@/api/missionScan';
@@ -22,14 +23,6 @@ function downloadBlob(document: Document, blob: Blob, filename: string) {
 
 function area(value: number | undefined) {
 	return typeof value === 'number' && Number.isFinite(value) ? `${(value / 1_000_000).toFixed(2)} km²` : '待计算';
-}
-
-function duration(result: ScanResult | null, speedKnots: number, cooperation?: CooperationSimulation) {
-	if (!result || !Number.isFinite(result.path_length_m) || !Number.isFinite(speedKnots) || speedKnots <= 0) return '待计算';
-	const assigned = cooperation?.fleet?.boats.filter((boat) => boat.route.length) ?? [];
-	const longestRoute = assigned.length ? Math.max(...assigned.map((boat) => boat.pathMeters)) : result.routes?.length ? Math.max(...result.routes.map((route) => route.path_length_m)) : result.path_length_m;
-	const minutes = Math.round(longestRoute / (speedKnots * 1852) * 60);
-	return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
 }
 
 export function MissionScanDownloadSave({ result, speedKnots, agentId, sessionId, mapFrameRef }: {
@@ -164,6 +157,7 @@ export function MissionScanSummary({ result, speedKnots, portalDocument, coopera
 	const runningCount = assets.filter((asset) => asset.status === '搜索中' || asset.status === '转场中' || asset.status === '复核中').length;
 	const offlineCount = assets.filter((asset) => asset.status === '失联').length;
 	const observations = cooperation.fleet?.observations ?? [];
+	const assignedRouteMeters = cooperation.fleet?.boats.filter((boat) => boat.route.length).map((boat) => boat.pathMeters);
 	return <div className="mission-scan-summary situation-summary">
 		<article className="situation-stat-card">
 			<header><h3>任务效率</h3><button className="situation-stat-detail-button" type="button" onClick={() => setDetailsOpen(true)}>查看详情 ›</button></header>
@@ -179,8 +173,8 @@ export function MissionScanSummary({ result, speedKnots, portalDocument, coopera
 		</article>
 		<article className="situation-stat-card">
 			<header><h3>任务耗时</h3></header>
-			<div className="situation-duration-value">{simStarted ? formatMissionElapsed(cooperation.second) : duration(result, speedKnots, cooperation)}</div><span className="situation-duration-caption">{simStarted ? `无人艇按 ${speedKnots} 节匀速推进` : `按 ${speedKnots} 节恒定航速估算`}</span><div className="situation-duration-track"><i style={{ width: `${simStarted ? simulatedCoverage(cooperation) : result ? 100 : 0}%` }} /></div><div className="situation-duration-foot"><span>{simStarted ? '航迹执行' : '规划航程'}</span><strong>{simStarted ? `${simulatedCoverage(cooperation)}%` : result ? `${(result.path_length_m / 1000).toFixed(1)} km` : '待计算'}</strong></div>
+			<div className="situation-duration-value">{simStarted ? formatMissionElapsed(cooperation.second) : formatPlannedScanDuration(result, speedKnots, assignedRouteMeters)}</div><span className="situation-duration-caption">{simStarted ? `无人艇按 ${speedKnots} 节匀速推进` : `按 ${speedKnots} 节恒定航速估算`}</span><div className="situation-duration-track"><i style={{ width: `${simStarted ? simulatedCoverage(cooperation) : result ? 100 : 0}%` }} /></div><div className="situation-duration-foot"><span>{simStarted ? '航迹执行' : '规划航程'}</span><strong>{simStarted ? `${simulatedCoverage(cooperation)}%` : result ? `${(result.path_length_m / 1000).toFixed(1)} km` : '待计算'}</strong></div>
 		</article>
-	{detailsOpen && portalDocument && createPortal(<div className="situation-detail-backdrop" role="presentation" onMouseDown={() => setDetailsOpen(false)}><section className="situation-detail-dialog" role="dialog" aria-modal="true" aria-label="扫描规划详情" onMouseDown={(event) => event.stopPropagation()}><header><h3>扫描规划详情</h3><button type="button" aria-label="关闭详情" onClick={() => setDetailsOpen(false)}>×</button></header><dl><div><dt>规划覆盖率</dt><dd>{result ? `${coverage.toFixed(1)}%` : '待计算'}</dd></div><div><dt>规划航程</dt><dd>{result ? `${(result.path_length_m / 1000).toFixed(1)} km` : '待计算'}</dd></div><div><dt>预计覆盖面积</dt><dd>{area(result?.covered_area_m2)}</dd></div><div><dt>目标面积</dt><dd>{area(result?.target_area_m2)}</dd></div><div><dt>未覆盖面积</dt><dd>{area(uncovered)}</dd></div><div><dt>航点数量</dt><dd>{result?.waypoint_count ?? '待计算'}</dd></div><div><dt>预计耗时</dt><dd>{duration(result, speedKnots)}</dd></div></dl></section></div>, portalDocument.body)}
+	{detailsOpen && portalDocument && createPortal(<div className="situation-detail-backdrop" role="presentation" onMouseDown={() => setDetailsOpen(false)}><section className="situation-detail-dialog" role="dialog" aria-modal="true" aria-label="扫描规划详情" onMouseDown={(event) => event.stopPropagation()}><header><h3>扫描规划详情</h3><button type="button" aria-label="关闭详情" onClick={() => setDetailsOpen(false)}>×</button></header><dl><div><dt>规划覆盖率</dt><dd>{result ? `${coverage.toFixed(1)}%` : '待计算'}</dd></div><div><dt>规划航程</dt><dd>{result ? `${(result.path_length_m / 1000).toFixed(1)} km` : '待计算'}</dd></div><div><dt>预计覆盖面积</dt><dd>{area(result?.covered_area_m2)}</dd></div><div><dt>目标面积</dt><dd>{area(result?.target_area_m2)}</dd></div><div><dt>未覆盖面积</dt><dd>{area(uncovered)}</dd></div><div><dt>航点数量</dt><dd>{result?.waypoint_count ?? '待计算'}</dd></div><div><dt>预计耗时</dt><dd>{formatPlannedScanDuration(result, speedKnots)}</dd></div></dl></section></div>, portalDocument.body)}
 	</div>;
 }

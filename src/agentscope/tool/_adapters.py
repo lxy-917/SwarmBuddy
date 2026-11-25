@@ -253,11 +253,13 @@ class MCPTool(ToolBase):
 
         self.description = tool.description or ""
 
-        # Preserve the full inputSchema (including $defs, anyOf, oneOf, etc.)
-        # rather than only copying "properties" and "required", which would
-        # silently drop any nested type definitions that the LLM needs to
-        # resolve $ref pointers.
-        _schema = dict(tool.inputSchema) if tool.inputSchema else {}
+        # MCP SDK releases have used both camelCase wire names and snake_case
+        # Python attributes. Preserve the full schema either way, including
+        # $defs, anyOf, and oneOf, so nested type definitions remain intact.
+        input_schema = getattr(tool, "inputSchema", None)
+        if input_schema is None:
+            input_schema = getattr(tool, "input_schema", None)
+        _schema = dict(input_schema) if input_schema else {}
         _schema.setdefault("type", "object")
         _schema.setdefault("properties", {})
         _schema.setdefault("required", [])
@@ -269,8 +271,15 @@ class MCPTool(ToolBase):
 
         # Extract is_read_only from MCP tool annotations
         self.is_read_only = False
-        if tool.annotations and hasattr(tool.annotations, "readOnlyHint"):
-            self.is_read_only = tool.annotations.readOnlyHint or False
+        if tool.annotations:
+            read_only_hint = getattr(tool.annotations, "readOnlyHint", None)
+            if read_only_hint is None:
+                read_only_hint = getattr(
+                    tool.annotations,
+                    "read_only_hint",
+                    False,
+                )
+            self.is_read_only = bool(read_only_hint)
 
         # Store MCP tool and connection info
         self._tool = tool
@@ -350,7 +359,7 @@ class MCPTool(ToolBase):
         return ToolChunk(
             content=self._convert_mcp_content_to_blocks(result.content),
             state=ToolResultState.ERROR
-            if result.isError
+            if getattr(result, "isError", getattr(result, "is_error", False))
             else ToolResultState.RUNNING,
         )
 
